@@ -282,13 +282,32 @@ private func quotaTint(for percent: Double?) -> Color {
     switch quotaTone(for: percent) { case .healthy: return ColorTokens.green; case .watch: return ColorTokens.amber; case .critical: return ColorTokens.red }
 }
 
+private struct ColoredQuotaProgressStyle: ProgressViewStyle {
+    let tint: Color
+    let minimumFill: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        GeometryReader { proxy in
+            let fraction = min(max(configuration.fractionCompleted ?? 0, 0), 1)
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.10))
+                Capsule(style: .continuous)
+                    .fill(tint)
+                    .frame(width: fraction == 0 ? minimumFill : proxy.size.width * fraction)
+            }
+            .frame(height: 6)
+        }
+        .frame(height: 6)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct QuotaBar: View {
     let value: Double?
     var body: some View {
         ProgressView(value: value.map { min(max($0, 0), 100) }, total: 100)
-            .progressViewStyle(.linear)
-            .tint(quotaTint(for: value))
-            .controlSize(.small)
+            .progressViewStyle(ColoredQuotaProgressStyle(tint: quotaTint(for: value), minimumFill: value == nil ? 0 : 2))
             .frame(height: 6)
     }
 }
@@ -485,6 +504,21 @@ private func relativeUpdated(_ date: Date) -> String {
     return "\(seconds / 3_600)h ago"
 }
 
+private func alignedMenuTitle(_ title: String, checkmark: Bool = false) -> NSAttributedString {
+    let paragraphStyle = NSMutableParagraphStyle()
+    paragraphStyle.firstLineHeadIndent = 48
+    paragraphStyle.headIndent = 48
+    paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: 405)]
+    paragraphStyle.defaultTabInterval = 0
+    let value = checkmark ? "\(title)\t✓" : title
+    let attributed = NSMutableAttributedString(string: value)
+    attributed.addAttributes([
+        .font: NSFont.menuFont(ofSize: 0),
+        .paragraphStyle: paragraphStyle,
+    ], range: NSRange(location: 0, length: attributed.length))
+    return attributed
+}
+
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = SettingsStore()
@@ -580,10 +614,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func addNativeActionItems() {
         let dashboardItem = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboardFromMenu(_:)), keyEquivalent: "")
         dashboardItem.target = self
+        dashboardItem.attributedTitle = alignedMenuTitle("Open Dashboard")
         menu.addItem(dashboardItem)
 
         let serverItem = NSMenuItem(title: "Config Server…", action: #selector(configureServerFromMenu(_:)), keyEquivalent: "")
         serverItem.target = self
+        serverItem.attributedTitle = alignedMenuTitle("Config Server…")
         menu.addItem(serverItem)
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
@@ -595,6 +631,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit Codex LB Status", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
         quitItem.target = self
+        quitItem.attributedTitle = alignedMenuTitle("Quit Codex LB Status")
         menu.addItem(quitItem)
     }
 
@@ -603,15 +640,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         launchAtLoginItem?.state = .off
         guard let launchAtLoginItem else { return }
 
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: 350)]
-        paragraphStyle.defaultTabInterval = 0
-        let title = NSMutableAttributedString(string: "Launch at Login\t\(enabled ? "✓" : "")")
-        title.addAttributes([
-            .font: NSFont.menuFont(ofSize: 0),
-            .paragraphStyle: paragraphStyle,
-        ], range: NSRange(location: 0, length: title.length))
-        launchAtLoginItem.attributedTitle = title
+        launchAtLoginItem.attributedTitle = alignedMenuTitle("Launch at Login", checkmark: enabled)
     }
 
     private func closeMenu() {
