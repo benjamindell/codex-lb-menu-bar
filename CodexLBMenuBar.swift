@@ -403,7 +403,6 @@ private struct AccountCard: View {
             }
         }
         .padding(.vertical, 8)
-        .padding(.horizontal, 7)
     }
 
     var body: some View {
@@ -437,7 +436,7 @@ private struct MenuContentView: View {
                             ForEach(Array(sortedAccounts.enumerated()), id: \.element.id) { index, account in
                                 AccountCard(account: account, openAccount: { openAccount(account) })
                                 if index < sortedAccounts.count - 1 {
-                                    Divider().padding(.horizontal, 7)
+                                    Divider()
                                 }
                             }
                         }
@@ -458,7 +457,7 @@ private struct MenuContentView: View {
         // Keep the native menu item tight for the empty/error state. Once there
         // are enough account cards to exceed the screen-derived ceiling, the
         // inner ScrollView becomes the bounded viewport.
-        .frame(width: 380, height: model.preferredMenuHeight)
+        .frame(width: 454, height: model.preferredMenuHeight)
         .preferredColorScheme(nil)
         .onPreferenceChange(MenuContentHeightKey.self) { height in
             guard height > 0 else { return }
@@ -488,7 +487,6 @@ private struct MenuContentView: View {
             }
             Divider()
         }
-        .padding(.horizontal, 7)
     }
 
     private func emptyState(title: String, detail: String) -> some View {
@@ -504,19 +502,52 @@ private func relativeUpdated(_ date: Date) -> String {
     return "\(seconds / 3_600)h ago"
 }
 
-private func alignedMenuTitle(_ title: String, checkmark: Bool = false) -> NSAttributedString {
-    let paragraphStyle = NSMutableParagraphStyle()
-    paragraphStyle.firstLineHeadIndent = 48
-    paragraphStyle.headIndent = 48
-    paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: 405)]
-    paragraphStyle.defaultTabInterval = 0
-    let value = checkmark ? "\(title)\t✓" : title
-    let attributed = NSMutableAttributedString(string: value)
-    attributed.addAttributes([
-        .font: NSFont.menuFont(ofSize: 0),
-        .paragraphStyle: paragraphStyle,
-    ], range: NSRange(location: 0, length: attributed.length))
-    return attributed
+private final class MenuActionItemView: NSView {
+    private let titleField: NSTextField
+    private let trailingField: NSTextField
+    private(set) var isHighlighted = false
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 454, height: 24) }
+
+    init(title: String, trailing: String = "") {
+        titleField = NSTextField(labelWithString: title)
+        trailingField = NSTextField(labelWithString: trailing)
+        super.init(frame: NSRect(x: 0, y: 0, width: 454, height: 24))
+        titleField.font = .menuFont(ofSize: 0)
+        trailingField.font = .menuFont(ofSize: 0)
+        trailingField.alignment = .right
+        addSubview(titleField)
+        addSubview(trailingField)
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            trailingField.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        updateColors()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setTrailing(_ value: String) { trailingField.stringValue = value }
+
+    func setHighlighted(_ highlighted: Bool) {
+        isHighlighted = highlighted
+        updateColors()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isHighlighted else { return }
+        NSColor.selectedContentBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
+
+    private func updateColors() {
+        let color = isHighlighted ? NSColor.selectedMenuItemTextColor : NSColor.controlTextColor
+        titleField.textColor = color
+        trailingField.textColor = isHighlighted ? NSColor.selectedMenuItemTextColor : NSColor.secondaryLabelColor
+    }
 }
 
 @MainActor
@@ -527,6 +558,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private let menu = NSMenu()
     private let menuItem = NSMenuItem()
     private var launchAtLoginItem: NSMenuItem?
+    private var launchAtLoginView: MenuActionItemView?
     private var hostingView: NSHostingView<MenuContentView>?
     private var timer: Timer?
     private var modelObservation: AnyCancellable?
@@ -574,7 +606,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             openAccount: { [weak self] account in self?.openAccount(account) }
         )
         let view = NSHostingView(rootView: rootView)
-        view.frame = NSRect(x: 0, y: 0, width: 380, height: height)
+        view.frame = NSRect(x: 0, y: 0, width: 454, height: height)
         view.autoresizingMask = [.width, .height]
         hostingView = view
         return view
@@ -598,7 +630,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func resizeHostingView() {
-        hostingView?.setFrameSize(NSSize(width: 380, height: viewModel.preferredMenuHeight))
+        hostingView?.setFrameSize(NSSize(width: 454, height: viewModel.preferredMenuHeight))
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -614,16 +646,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func addNativeActionItems() {
         let dashboardItem = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboardFromMenu(_:)), keyEquivalent: "")
         dashboardItem.target = self
-        dashboardItem.attributedTitle = alignedMenuTitle("Open Dashboard")
+        dashboardItem.view = MenuActionItemView(title: "Open Dashboard")
         menu.addItem(dashboardItem)
 
         let serverItem = NSMenuItem(title: "Config Server…", action: #selector(configureServerFromMenu(_:)), keyEquivalent: "")
         serverItem.target = self
-        serverItem.attributedTitle = alignedMenuTitle("Config Server…")
+        serverItem.view = MenuActionItemView(title: "Config Server…")
         menu.addItem(serverItem)
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         launchItem.target = self
+        let launchView = MenuActionItemView(title: "Launch at Login")
+        launchItem.view = launchView
+        launchAtLoginView = launchView
         launchAtLoginItem = launchItem
         menu.addItem(launchItem)
         updateLaunchAtLoginItem()
@@ -631,16 +666,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit Codex LB Status", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
         quitItem.target = self
-        quitItem.attributedTitle = alignedMenuTitle("Quit Codex LB Status")
+        quitItem.view = MenuActionItemView(title: "Quit Codex LB Status", trailing: "⌘Q")
         menu.addItem(quitItem)
     }
 
     private func updateLaunchAtLoginItem() {
         let enabled = SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval
         launchAtLoginItem?.state = .off
-        guard let launchAtLoginItem else { return }
+        guard launchAtLoginItem != nil else { return }
+        launchAtLoginView?.setTrailing(enabled ? "✓" : "")
+    }
 
-        launchAtLoginItem.attributedTitle = alignedMenuTitle("Launch at Login", checkmark: enabled)
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        for menuItem in menu.items {
+            (menuItem.view as? MenuActionItemView)?.setHighlighted(menuItem === item)
+        }
     }
 
     private func closeMenu() {
