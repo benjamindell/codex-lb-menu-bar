@@ -193,10 +193,27 @@ private final class StatusViewModel: ObservableObject {
     /// The menu item should be content-sized until the account list genuinely
     /// needs scrolling. `availableHeight` is only the screen-derived ceiling.
     var preferredMenuHeight: CGFloat {
-        let accountCount = overview?.accounts.count ?? 0
-        // Compact account rows are about 110pt each, with a fixed header and
-        // summary around them. Keep three normal accounts within one viewport.
-        let desiredHeight = accountCount == 0 ? 320 : 130 + CGFloat(accountCount) * 110
+        guard let accounts = overview?.accounts, !accounts.isEmpty else {
+            return min(320, availableHeight)
+        }
+
+        // Keep the native menu content-sized for the common case instead of
+        // reserving a generic fixed-height viewport. A row with one quota has
+        // no quota heading; rows with multiple windows get a little more room
+        // for the labelled bars and their reset metadata.
+        let accountHeight = accounts.reduce(CGFloat.zero) { total, account in
+            let quotaCount = [
+                account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil,
+                account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil,
+                account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil,
+            ].filter { $0 }.count
+            let quotaRowHeight: CGFloat = quotaCount > 1 ? 45 : 25
+            let quotaSpacing = CGFloat(max(0, quotaCount - 1)) * 8
+            let cardHeight = 16 + 40 + 8 + CGFloat(max(1, quotaCount)) * quotaRowHeight + quotaSpacing
+            return total + cardHeight
+        }
+        let separators = CGFloat(max(0, accounts.count - 1))
+        let desiredHeight = 20 + 52 + 14 + accountHeight + separators
         return min(desiredHeight, availableHeight)
     }
 
@@ -259,19 +276,19 @@ private struct QuotaBar: View {
             .progressViewStyle(.linear)
             .tint(quotaTint(for: value))
             .controlSize(.small)
-            .frame(height: 4)
+            .frame(height: 6)
     }
 }
 
 private struct QuotaRow: View {
-    let title: String
+    let title: String?
     let value: Double?
     let resetAt: Date?
     let accessoryIcon: String?
     let accessoryText: String?
     let accessoryColor: Color
 
-    init(title: String, value: Double?, resetAt: Date?, accessoryIcon: String? = nil, accessoryText: String? = nil, accessoryColor: Color = .secondary) {
+    init(title: String? = nil, value: Double?, resetAt: Date?, accessoryIcon: String? = nil, accessoryText: String? = nil, accessoryColor: Color = .secondary) {
         self.title = title
         self.value = value
         self.resetAt = resetAt
@@ -281,16 +298,21 @@ private struct QuotaRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text(roundedPercent(value)).font(.caption.weight(.semibold)).foregroundStyle(value == nil ? .secondary : .primary)
+        VStack(alignment: .leading, spacing: 5) {
+            if let title {
+                HStack {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(roundedPercent(value)).font(.caption.weight(.semibold)).foregroundStyle(value == nil ? .secondary : .primary)
+                }
             }
             QuotaBar(value: value)
             HStack(spacing: 4) {
-                Text(relativeReset(resetAt)).font(.caption2).foregroundStyle(.secondary)
+                Text("\(roundedPercent(value)) left").font(.caption2.weight(.medium)).foregroundStyle(value == nil ? .secondary : .primary)
                 Spacer(minLength: 8)
+                Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 if let accessoryIcon, let accessoryText {
                     Image(systemName: accessoryIcon).foregroundStyle(accessoryColor)
                     Text(accessoryText).foregroundStyle(.primary)
@@ -307,37 +329,23 @@ private struct AccountCard: View {
     let openAccount: () -> Void
     @State private var isHovered = false
 
-    private var statusColor: Color {
-        switch account.status { case "active": return ColorTokens.green; case "paused", "rate_limited": return ColorTokens.amber; default: return ColorTokens.red }
-    }
-    private var statusIcon: String {
-        switch account.status {
-        case "active": return "checkmark.circle.fill"
-        case "paused": return "pause.circle.fill"
-        case "rate_limited", "quota_exceeded": return "exclamationmark.triangle.fill"
-        case "reauth_required": return "person.crop.circle.badge.exclamationmark"
-        default: return "xmark.circle.fill"
-        }
-    }
     private var warmupText: String { account.limitWarmupEnabled == true ? "Warm-up on" : "Warm-up off" }
     private var warmupIcon: String { account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash" }
     private var warmupColor: Color { account.limitWarmupEnabled == true ? ColorTokens.blue : .secondary }
     private var hasPrimary: Bool { account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil }
     private var hasWeekly: Bool { account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil }
     private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
+    private var quotaCount: Int { [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count }
+    private var showQuotaLabels: Bool { quotaCount > 1 }
     private var warmupOnPrimary: Bool { hasPrimary && !hasWeekly }
     private var warmupOnWeekly: Bool { hasWeekly }
     private var warmupOnMonthly: Bool { !hasPrimary && !hasWeekly && hasMonthly }
     private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: statusIcon)
-                    .foregroundStyle(statusColor)
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 20)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(account.title).font(.headline.weight(.semibold)).lineLimit(1)
-                    Text("\(account.planType.capitalized) · \(account.email)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(account.email).font(.headline.weight(.semibold)).lineLimit(1)
+                    Text(account.planType.capitalized).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
@@ -345,10 +353,10 @@ private struct AccountCard: View {
                     .foregroundStyle(.tertiary)
                     .padding(.top, 3)
             }
-            HStack(spacing: 10) {
+            VStack(spacing: 8) {
                 if hasPrimary {
                     QuotaRow(
-                        title: "5-hour",
+                        title: showQuotaLabels ? "5-hour" : nil,
                         value: account.usage?.primaryRemainingPercent,
                         resetAt: account.resetAtPrimary,
                         accessoryIcon: warmupOnPrimary ? warmupIcon : nil,
@@ -358,7 +366,7 @@ private struct AccountCard: View {
                 }
                 if hasWeekly {
                     QuotaRow(
-                        title: "Weekly",
+                        title: showQuotaLabels ? "Weekly" : nil,
                         value: account.usage?.secondaryRemainingPercent,
                         resetAt: account.resetAtSecondary,
                         accessoryIcon: warmupOnWeekly ? warmupIcon : nil,
@@ -366,19 +374,16 @@ private struct AccountCard: View {
                         accessoryColor: warmupColor
                     )
                 }
-            }
-            if hasMonthly {
-                QuotaRow(
-                    title: "Monthly",
-                    value: account.usage?.monthlyRemainingPercent,
-                    resetAt: account.resetAtMonthly,
-                    accessoryIcon: warmupOnMonthly ? warmupIcon : nil,
-                    accessoryText: warmupOnMonthly ? warmupText : nil,
-                    accessoryColor: warmupColor
-                )
-            }
-            if account.securityWorkAuthorized == true {
-                Image(systemName: "checkmark.shield.fill").foregroundStyle(ColorTokens.green).font(.caption)
+                if hasMonthly {
+                    QuotaRow(
+                        title: showQuotaLabels ? "Monthly" : nil,
+                        value: account.usage?.monthlyRemainingPercent,
+                        resetAt: account.resetAtMonthly,
+                        accessoryIcon: warmupOnMonthly ? warmupIcon : nil,
+                        accessoryText: warmupOnMonthly ? warmupText : nil,
+                        accessoryColor: warmupColor
+                    )
+                }
             }
         }
         .padding(.vertical, 8)
@@ -412,7 +417,6 @@ private struct MenuContentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     header
                     if let _ = model.overview, !sortedAccounts.isEmpty {
-                        summary
                         VStack(spacing: 0) {
                             ForEach(Array(sortedAccounts.enumerated()), id: \.element.id) { index, account in
                                 AccountCard(account: account, openAccount: { openAccount(account) })
@@ -439,34 +443,33 @@ private struct MenuContentView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(ColorTokens.blue)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Codex LB").font(.headline.weight(.semibold))
-                Text(model.lastRefreshedAt.map { "Updated \(relativeUpdated($0))" } ?? "Auto-refreshes every minute").font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Codex LB").font(.headline.weight(.semibold))
+                    Text(model.lastRefreshedAt.map { "Updated \(relativeUpdated($0))" } ?? "Auto-refreshes every minute")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    let average = model.secondaryAverage ?? model.primaryAverage
+                    Text(roundedPercent(average))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(quotaTint(for: average))
+                    Text("\(model.activeCount)/\(model.totalCount) active")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Button(action: model.refresh) {
+                    Image(systemName: model.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh now")
             }
-            Spacer()
-            Button(action: model.refresh) { Image(systemName: model.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise") }.buttonStyle(.borderless).help("Refresh now")
+            Divider()
         }
         .padding(.horizontal, 7)
-    }
-
-    private var summary: some View {
-        HStack(spacing: 10) {
-            summaryPill(label: "5-hour avg", value: model.primaryAverage)
-            summaryPill(label: "Weekly avg", value: model.secondaryAverage)
-            VStack(alignment: .trailing, spacing: 2) { Text("\(model.activeCount)/\(model.totalCount)").font(.subheadline.weight(.semibold)); Text("active").font(.caption2).foregroundStyle(.secondary) }
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 8)
-        .overlay(alignment: .bottom) { Divider() }
-    }
-
-    private func summaryPill(label: String, value: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 2) { Text(roundedPercent(value)).font(.title3.weight(.semibold)).foregroundStyle(quotaTint(for: value)); Text(label).font(.caption2).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func emptyState(title: String, detail: String) -> some View {
