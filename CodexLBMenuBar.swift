@@ -175,6 +175,7 @@ private final class StatusViewModel: ObservableObject {
     @Published var serverVersion: String?
     @Published var showSettings = false
     @Published var availableHeight: CGFloat = 520
+    @Published var measuredContentHeight: CGFloat?
 
     let settings: SettingsStore
     private var client: CodexLBClient
@@ -197,6 +198,10 @@ private final class StatusViewModel: ObservableObject {
             return min(320, availableHeight)
         }
 
+        if let measuredContentHeight, measuredContentHeight > 0 {
+            return min(measuredContentHeight, availableHeight)
+        }
+
         // Keep the native menu content-sized for the common case instead of
         // reserving a generic fixed-height viewport. A row with one quota has
         // no quota heading; rows with multiple windows get a little more room
@@ -209,11 +214,11 @@ private final class StatusViewModel: ObservableObject {
             ].filter { $0 }.count
             let quotaRowHeight: CGFloat = quotaCount > 1 ? 45 : 25
             let quotaSpacing = CGFloat(max(0, quotaCount - 1)) * 8
-            let cardHeight = 16 + 40 + 8 + CGFloat(max(1, quotaCount)) * quotaRowHeight + quotaSpacing
+            let cardHeight = 16 + 40 + 8 + CGFloat(quotaCount) * quotaRowHeight + quotaSpacing
             return total + cardHeight
         }
         let separators = CGFloat(max(0, accounts.count - 1))
-        let desiredHeight = 20 + 52 + 14 + accountHeight + separators
+        let desiredHeight = 10 + 52 + 14 + accountHeight + separators + 14
         return min(desiredHeight, availableHeight)
     }
 
@@ -257,6 +262,14 @@ private final class StatusViewModel: ObservableObject {
     func loginGuest(password: String?) async throws { _ = try await client.loginGuest(password: password); refresh() }
 }
 
+private struct MenuContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct ColorTokens {
     static let blue = Color(red: 0.19, green: 0.49, blue: 0.92)
     static let green = Color(red: 0.16, green: 0.72, blue: 0.43)
@@ -284,39 +297,27 @@ private struct QuotaRow: View {
     let title: String?
     let value: Double?
     let resetAt: Date?
-    let accessoryIcon: String?
-    let accessoryText: String?
-    let accessoryColor: Color
 
-    init(title: String? = nil, value: Double?, resetAt: Date?, accessoryIcon: String? = nil, accessoryText: String? = nil, accessoryColor: Color = .secondary) {
+    init(title: String? = nil, value: Double?, resetAt: Date?) {
         self.title = title
         self.value = value
         self.resetAt = resetAt
-        self.accessoryIcon = accessoryIcon
-        self.accessoryText = accessoryText
-        self.accessoryColor = accessoryColor
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if let title {
-                HStack {
-                    Text(title).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(roundedPercent(value)).font(.caption.weight(.semibold)).foregroundStyle(value == nil ? .secondary : .primary)
-                }
+                Text(title).font(.caption).foregroundStyle(.secondary)
             }
             QuotaBar(value: value)
             HStack(spacing: 4) {
-                Text("\(roundedPercent(value)) left").font(.caption2.weight(.medium)).foregroundStyle(value == nil ? .secondary : .primary)
-                Spacer(minLength: 8)
                 Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if let accessoryIcon, let accessoryText {
-                    Image(systemName: accessoryIcon).foregroundStyle(accessoryColor)
-                    Text(accessoryText).foregroundStyle(.primary)
-                }
+                Spacer(minLength: 8)
+                Text("\(roundedPercent(value)) left")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(value == nil ? .secondary : .primary)
             }
             .font(.caption2.weight(.medium))
         }
@@ -337,51 +338,47 @@ private struct AccountCard: View {
     private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
     private var quotaCount: Int { [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count }
     private var showQuotaLabels: Bool { quotaCount > 1 }
-    private var warmupOnPrimary: Bool { hasPrimary && !hasWeekly }
-    private var warmupOnWeekly: Bool { hasWeekly }
-    private var warmupOnMonthly: Bool { !hasPrimary && !hasWeekly && hasMonthly }
     private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(account.email).font(.headline.weight(.semibold)).lineLimit(1)
-                    Text(account.planType.capitalized).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 3)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(account.planType.capitalized).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: warmupIcon)
+                        .font(.caption)
+                        .foregroundStyle(warmupColor)
+                    Text(warmupText)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                }
             }
             VStack(spacing: 8) {
                 if hasPrimary {
                     QuotaRow(
                         title: showQuotaLabels ? "5-hour" : nil,
                         value: account.usage?.primaryRemainingPercent,
-                        resetAt: account.resetAtPrimary,
-                        accessoryIcon: warmupOnPrimary ? warmupIcon : nil,
-                        accessoryText: warmupOnPrimary ? warmupText : nil,
-                        accessoryColor: warmupColor
+                        resetAt: account.resetAtPrimary
                     )
                 }
                 if hasWeekly {
                     QuotaRow(
                         title: showQuotaLabels ? "Weekly" : nil,
                         value: account.usage?.secondaryRemainingPercent,
-                        resetAt: account.resetAtSecondary,
-                        accessoryIcon: warmupOnWeekly ? warmupIcon : nil,
-                        accessoryText: warmupOnWeekly ? warmupText : nil,
-                        accessoryColor: warmupColor
+                        resetAt: account.resetAtSecondary
                     )
                 }
                 if hasMonthly {
                     QuotaRow(
                         title: showQuotaLabels ? "Monthly" : nil,
                         value: account.usage?.monthlyRemainingPercent,
-                        resetAt: account.resetAtMonthly,
-                        accessoryIcon: warmupOnMonthly ? warmupIcon : nil,
-                        accessoryText: warmupOnMonthly ? warmupText : nil,
-                        accessoryColor: warmupColor
+                        resetAt: account.resetAtMonthly
                     )
                 }
             }
@@ -432,7 +429,11 @@ private struct MenuContentView: View {
                     }
                 }
                 .padding(.horizontal, 7)
-                .padding(.vertical, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 14)
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: MenuContentHeightKey.self, value: proxy.size.height)
+                })
             }
         }
         // Keep the native menu item tight for the empty/error state. Once there
@@ -440,6 +441,10 @@ private struct MenuContentView: View {
         // inner ScrollView becomes the bounded viewport.
         .frame(width: 380, height: model.preferredMenuHeight)
         .preferredColorScheme(nil)
+        .onPreferenceChange(MenuContentHeightKey.self) { height in
+            guard height > 0 else { return }
+            model.measuredContentHeight = height
+        }
     }
 
     private var header: some View {
@@ -455,17 +460,12 @@ private struct MenuContentView: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     let average = model.secondaryAverage ?? model.primaryAverage
                     Text(roundedPercent(average))
-                        .font(.title3.weight(.semibold))
+                        .font(.headline.weight(.semibold))
                         .foregroundStyle(quotaTint(for: average))
                     Text("\(model.activeCount)/\(model.totalCount) active")
-                        .font(.caption.weight(.medium))
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
-                Button(action: model.refresh) {
-                    Image(systemName: model.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh now")
             }
             Divider()
         }
@@ -496,6 +496,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var hostingView: NSHostingView<MenuContentView>?
     private var timer: Timer?
     private var modelObservation: AnyCancellable?
+    private var heightObservation: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -522,6 +523,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
         modelObservation = viewModel.$overview.sink { [weak self] _ in
             self?.updateStatusButton()
+            self?.resizeHostingView()
+        }
+        heightObservation = viewModel.$measuredContentHeight.sink { [weak self] _ in
             self?.resizeHostingView()
         }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -584,7 +588,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         launchItem.target = self
-        launchItem.onStateImage = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Enabled")
         launchAtLoginItem = launchItem
         menu.addItem(launchItem)
         updateLaunchAtLoginItem()
@@ -596,7 +599,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func updateLaunchAtLoginItem() {
-        launchAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        let enabled = SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval
+        launchAtLoginItem?.state = .off
+        guard let launchAtLoginItem else { return }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: 350)]
+        paragraphStyle.defaultTabInterval = 0
+        let title = NSMutableAttributedString(string: "Launch at Login\t\(enabled ? "✓" : "")")
+        title.addAttributes([
+            .font: NSFont.menuFont(ofSize: 0),
+            .paragraphStyle: paragraphStyle,
+        ], range: NSRange(location: 0, length: title.length))
+        launchAtLoginItem.attributedTitle = title
     }
 
     private func closeMenu() {
@@ -695,7 +710,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func showError(_ message: String) { let alert = NSAlert(); alert.messageText = "Codex LB Status"; alert.informativeText = message; alert.addButton(withTitle: "OK"); alert.runModal() }
-    func applicationWillTerminate(_ notification: Notification) { timer?.invalidate(); modelObservation?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) {
+        timer?.invalidate()
+        modelObservation?.cancel()
+        heightObservation?.cancel()
+    }
 }
 
 @main
