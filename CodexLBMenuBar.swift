@@ -499,13 +499,11 @@ private struct MenuContentHeightKey: PreferenceKey {
 
 private enum MenuLayout {
     static let width: CGFloat = 454
-    static let contentInset: CGFloat = 7
     static let hoverInset: CGFloat = 7
-    // AppKit positions a custom menu view a few points inside the menu's
-    // visual bounds. This keeps its text on the same guide as the SwiftUI
-    // content, which has an explicit 7pt inset.
-    static let actionLeadingInset: CGFloat = 17
-    static let actionTrailingInset: CGFloat = 7
+    static let rowPadding: CGFloat = 7
+    // Every visible content edge uses this guide; backgrounds extend outward
+    // by rowPadding, leaving hoverInset between them and the menu edge.
+    static let contentInset = hoverInset + rowPadding
     static let trailingColumnWidth: CGFloat = 38
 }
 
@@ -648,13 +646,9 @@ private struct AccountCard: View {
         Button(action: openAccount) {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Keep the account text on the shared content guide while
-                // giving the hover treatment breathing room inside the row.
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
-                        .padding(.horizontal, MenuLayout.hoverInset)
-                }
+                .padding(.horizontal, MenuLayout.rowPadding)
+                .background(isHovered ? Color.primary.opacity(0.08) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -681,7 +675,7 @@ private struct MenuContentView: View {
                             ForEach(Array(sortedAccounts.enumerated()), id: \.element.id) { index, account in
                                 AccountCard(account: account, openAccount: { openAccount(account) })
                                 if index < sortedAccounts.count - 1 {
-                                    Divider()
+                                    Divider().padding(.horizontal, MenuLayout.rowPadding)
                                 }
                             }
                         }
@@ -691,7 +685,7 @@ private struct MenuContentView: View {
                         emptyState(title: model.isRefreshing ? "Refreshing usage" : "No accounts yet", detail: model.isRefreshing ? "Checking your connected apps…" : "Import an account in Codex LB, then refresh.")
                     }
                 }
-                .padding(.horizontal, MenuLayout.contentInset)
+                .padding(.horizontal, MenuLayout.hoverInset)
                 .padding(.top, 10)
                 .padding(.bottom, 14)
                 .background(GeometryReader { proxy in
@@ -732,10 +726,11 @@ private struct MenuContentView: View {
             }
             Divider()
         }
+        .padding(.horizontal, MenuLayout.rowPadding)
     }
 
     private func emptyState(title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) { Image(systemName: "waveform.path.ecg").font(.title2).foregroundStyle(ColorTokens.blue); Text(title).font(.headline); Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading).padding(18).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        VStack(alignment: .leading, spacing: 7) { Image(systemName: "waveform.path.ecg").font(.title2).foregroundStyle(ColorTokens.blue); Text(title).font(.headline); Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, MenuLayout.rowPadding).padding(.vertical, 18).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
 }
@@ -771,11 +766,11 @@ private final class MenuActionItemView: NSView {
         addSubview(titleField)
         addSubview(trailingField)
         NSLayoutConstraint.activate([
-            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MenuLayout.actionLeadingInset),
+            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MenuLayout.contentInset),
             titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingField.leadingAnchor, constant: -8),
             trailingField.widthAnchor.constraint(equalToConstant: MenuLayout.trailingColumnWidth),
-            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MenuLayout.actionTrailingInset),
+            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MenuLayout.contentInset),
             trailingField.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         updateColors()
@@ -815,8 +810,9 @@ private final class MenuActionItemView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard isHighlighted else { return }
-        NSColor.selectedContentBackgroundColor.setFill()
-        dirtyRect.fill()
+        NSColor.systemBlue.setFill()
+        let highlightRect = bounds.insetBy(dx: MenuLayout.hoverInset, dy: 0)
+        NSBezierPath(roundedRect: highlightRect, xRadius: 7, yRadius: 7).fill()
     }
 
     private func updateColors() {
