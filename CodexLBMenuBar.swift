@@ -23,6 +23,229 @@ private final class SettingsStore {
     }
 }
 
+private enum UpdateConfiguration {
+    // Keep the release channel in Info.plist so a fork can point at its own
+    // GitHub repository without changing updater code.
+    static var repository: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CodexLBUpdateRepository") as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static var assetName: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CodexLBUpdateAssetName") as? String ?? "CodexLBStatus.zip")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static var releasesURL: URL? {
+        guard !repository.isEmpty,
+              let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else { return nil }
+        return url
+    }
+
+    static var currentVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0"
+    }
+}
+
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let name: String
+    let body: String?
+    let assets: [GitHubReleaseAsset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case name
+        case body
+        case assets
+    }
+}
+
+private struct GitHubReleaseAsset: Decodable {
+    let name: String
+    let browserDownloadURL: URL
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadURL = "browser_download_url"
+    }
+}
+
+private struct AppUpdate {
+    let version: String
+    let releaseName: String
+    let releaseNotes: String
+    let assetURL: URL
+}
+
+private struct ComparableVersion: Comparable {
+    private let components: [Int]
+
+    init(_ value: String) {
+        let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        components = normalized
+            .split(separator: ".")
+            .map { Int($0.prefix { $0.isNumber }) ?? 0 }
+    }
+
+    static func < (lhs: ComparableVersion, rhs: ComparableVersion) -> Bool {
+        let count = max(lhs.components.count, rhs.components.count)
+        for index in 0..<count {
+            let left = index < lhs.components.count ? lhs.components[index] : 0
+            let right = index < rhs.components.count ? rhs.components[index] : 0
+            if left != right { return left < right }
+        }
+        return false
+    }
+}
+
+private enum UpdateError: LocalizedError {
+    case notConfigured
+    case invalidResponse
+    case server(Int)
+    case noCompatibleAsset
+    case invalidArchive
+    case unsignedArchive
+    case installFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured:
+            return "GitHub Releases updates are not configured for this build."
+        case .invalidResponse:
+            return "GitHub returned an invalid release response."
+        case .server(let status):
+            return "GitHub returned HTTP \(status) while checking for updates."
+        case .noCompatibleAsset:
+            return "The latest GitHub release does not contain a Codex LB Status update archive."
+        case .invalidArchive:
+            return "The downloaded update did not contain a Codex LB Status app."
+        case .unsignedArchive:
+            return "The downloaded update failed its code-signature check."
+        case .installFailed(let message):
+            return "Couldn’t prepare the update: \(message)"
+        }
+    }
+}
+
+private final class AppUpdater {
+    private let session: URLSession
+
+    init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        session = URLSession(configuration: configuration)
+    }
+
+    func checkForUpdate() async throws -> AppUpdate? {
+        guard let url = UpdateConfiguration.releasesURL else { throw UpdateError.notConfigured }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("CodexLBStatus/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw UpdateError.invalidResponse }
+        guard response.statusCode == 200 else { throw UpdateError.server(response.statusCode) }
+
+        let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+        guard ComparableVersion(release.tagName) > ComparableVersion(UpdateConfiguration.currentVersion) else { return nil }
+        guard let asset = release.assets.first(where: { $0.name == UpdateConfiguration.assetName })
+            ?? release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }) else {
+            throw UpdateError.noCompatibleAsset
+        }
+        return AppUpdate(
+            version: release.tagName,
+            releaseName: release.name,
+            releaseNotes: release.body ?? "",
+            assetURL: asset.browserDownloadURL
+        )
+    }
+
+    func install(_ update: AppUpdate) async throws {
+        var request = URLRequest(url: update.assetURL)
+        request.setValue("application/zip", forHTTPHeaderField: "Accept")
+        request.setValue("CodexLBStatus/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+            throw UpdateError.server((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        let fileManager = FileManager.default
+        let workspace = fileManager.temporaryDirectory.appendingPathComponent("CodexLBStatus-update-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
+            let archive = workspace.appendingPathComponent("update.zip")
+            try data.write(to: archive, options: .atomic)
+            let extractionDirectory = workspace.appendingPathComponent("extracted", isDirectory: true)
+            try fileManager.createDirectory(at: extractionDirectory, withIntermediateDirectories: true)
+            try runProcess("/usr/bin/ditto", arguments: ["-x", "-k", archive.path, extractionDirectory.path])
+
+            guard let appURL = findApp(in: extractionDirectory) else { throw UpdateError.invalidArchive }
+            guard verifyCodeSignature(at: appURL) else { throw UpdateError.unsignedArchive }
+            try launchInstaller(workspace: workspace, replacementApp: appURL)
+        } catch let error as UpdateError {
+            throw error
+        } catch {
+            throw UpdateError.installFailed(error.localizedDescription)
+        }
+    }
+
+    private func findApp(in directory: URL) -> URL? {
+        guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil) else { return nil }
+        for case let url as URL in enumerator where url.pathExtension == "app" {
+            return url
+        }
+        return nil
+    }
+
+    private func verifyCodeSignature(at appURL: URL) -> Bool {
+        (try? runProcess("/usr/bin/codesign", arguments: ["--verify", "--deep", "--strict", appURL.path])) != nil
+    }
+
+    private func launchInstaller(workspace: URL, replacementApp: URL) throws {
+        let currentApp = Bundle.main.bundleURL.standardizedFileURL
+        let scriptURL = workspace.appendingPathComponent("install-update.zsh")
+        let script = """
+        #!/bin/zsh
+        set -euo pipefail
+        target=\(shellQuote(currentApp.path))
+        replacement=\(shellQuote(replacementApp.path))
+        workspace=\(shellQuote(workspace.path))
+        pid=\(ProcessInfo.processInfo.processIdentifier)
+        for _ in {1..120}; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+        done
+        /bin/rm -rf "$target"
+        /usr/bin/ditto "$replacement" "$target"
+        /usr/bin/open "$target"
+        /bin/rm -rf "$workspace"
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [scriptURL.path]
+        try process.run()
+    }
+
+    private func runProcess(_ path: String, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw UpdateError.installFailed("\(path) exited with status \(process.terminationStatus)")
+        }
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 private enum ClientError: LocalizedError {
     case invalidURL(String), unauthorized, server(Int, String), transport(String)
 
@@ -270,6 +493,18 @@ private struct MenuContentHeightKey: PreferenceKey {
     }
 }
 
+private enum MenuLayout {
+    static let width: CGFloat = 454
+    static let contentInset: CGFloat = 7
+    static let hoverInset: CGFloat = 7
+    // AppKit positions a custom menu view a few points inside the menu's
+    // visual bounds. This keeps its text on the same guide as the SwiftUI
+    // content, which has an explicit 7pt inset.
+    static let actionLeadingInset: CGFloat = 17
+    static let actionTrailingInset: CGFloat = 7
+    static let trailingColumnWidth: CGFloat = 38
+}
+
 private struct ColorTokens {
     static let blue = Color(red: 0.19, green: 0.49, blue: 0.92)
     static let green = Color(red: 0.16, green: 0.72, blue: 0.43)
@@ -409,7 +644,13 @@ private struct AccountCard: View {
         Button(action: openAccount) {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isHovered ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                // Keep the account text on the shared content guide while
+                // giving the hover treatment breathing room inside the row.
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
+                        .padding(.horizontal, MenuLayout.hoverInset)
+                }
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -446,7 +687,7 @@ private struct MenuContentView: View {
                         emptyState(title: model.isRefreshing ? "Refreshing usage" : "No accounts yet", detail: model.isRefreshing ? "Checking your connected apps…" : "Import an account in Codex LB, then refresh.")
                     }
                 }
-                .padding(.horizontal, 7)
+                .padding(.horizontal, MenuLayout.contentInset)
                 .padding(.top, 10)
                 .padding(.bottom, 14)
                 .background(GeometryReader { proxy in
@@ -457,7 +698,7 @@ private struct MenuContentView: View {
         // Keep the native menu item tight for the empty/error state. Once there
         // are enough account cards to exceed the screen-derived ceiling, the
         // inner ScrollView becomes the bounded viewport.
-        .frame(width: 454, height: model.preferredMenuHeight)
+        .frame(width: MenuLayout.width, height: model.preferredMenuHeight)
         .preferredColorScheme(nil)
         .onPreferenceChange(MenuContentHeightKey.self) { height in
             guard height > 0 else { return }
@@ -507,27 +748,33 @@ private final class MenuActionItemView: NSView {
     private let trailingField: NSTextField
     private(set) var isHighlighted = false
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 454, height: 24) }
+    override var intrinsicContentSize: NSSize { NSSize(width: MenuLayout.width, height: 24) }
 
     init(title: String, trailing: String = "") {
         titleField = NSTextField(labelWithString: title)
         trailingField = NSTextField(labelWithString: trailing)
-        super.init(frame: NSRect(x: 0, y: 0, width: 454, height: 24))
+        super.init(frame: NSRect(x: 0, y: 0, width: MenuLayout.width, height: 24))
         titleField.font = .menuFont(ofSize: 0)
         trailingField.font = .menuFont(ofSize: 0)
         trailingField.alignment = .right
+        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        trailingField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(titleField)
         addSubview(trailingField)
         NSLayoutConstraint.activate([
-            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MenuLayout.actionLeadingInset),
             titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
-            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingField.leadingAnchor, constant: -8),
+            trailingField.widthAnchor.constraint(equalToConstant: MenuLayout.trailingColumnWidth),
+            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MenuLayout.actionTrailingInset),
             trailingField.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         updateColors()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setTitle(_ value: String) { titleField.stringValue = value }
 
     func setTrailing(_ value: String) { trailingField.stringValue = value }
 
@@ -553,14 +800,20 @@ private final class MenuActionItemView: NSView {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = SettingsStore()
+    private let updater = AppUpdater()
     private lazy var viewModel = StatusViewModel(settings: settings)
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let menuItem = NSMenuItem()
     private var launchAtLoginItem: NSMenuItem?
     private var launchAtLoginView: MenuActionItemView?
+    private var updateItem: NSMenuItem?
+    private var updateView: MenuActionItemView?
+    private var latestUpdate: AppUpdate?
+    private var updateCheckTask: Task<Void, Never>?
     private var hostingView: NSHostingView<MenuContentView>?
     private var timer: Timer?
+    private var updateTimer: Timer?
     private var modelObservation: AnyCancellable?
     private var heightObservation: AnyCancellable?
 
@@ -586,6 +839,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(.separator())
         addNativeActionItems()
         statusItem.menu = menu
+        checkForUpdates(showErrors: false)
 
         modelObservation = viewModel.$overview.sink { [weak self] _ in
             self?.updateStatusButton()
@@ -597,6 +851,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.viewModel.refresh() }
         }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates(showErrors: false) }
+        }
         viewModel.refresh()
     }
 
@@ -606,7 +863,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             openAccount: { [weak self] account in self?.openAccount(account) }
         )
         let view = NSHostingView(rootView: rootView)
-        view.frame = NSRect(x: 0, y: 0, width: 454, height: height)
+        view.frame = NSRect(x: 0, y: 0, width: MenuLayout.width, height: height)
         view.autoresizingMask = [.width, .height]
         hostingView = view
         return view
@@ -630,7 +887,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func resizeHostingView() {
-        hostingView?.setFrameSize(NSSize(width: 454, height: viewModel.preferredMenuHeight))
+        hostingView?.setFrameSize(NSSize(width: MenuLayout.width, height: viewModel.preferredMenuHeight))
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -662,6 +919,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         launchAtLoginItem = launchItem
         menu.addItem(launchItem)
         updateLaunchAtLoginItem()
+
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesFromMenu(_:)), keyEquivalent: "")
+        updateItem.target = self
+        let updateView = MenuActionItemView(title: "Check for Updates…")
+        updateItem.view = updateView
+        self.updateItem = updateItem
+        self.updateView = updateView
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit Codex LB Status", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
@@ -700,6 +965,53 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func openDashboardFromMenu(_ sender: Any?) { openDashboard() }
     @objc private func configureServerFromMenu(_ sender: Any?) { configureServer() }
+    @objc private func checkForUpdatesFromMenu(_ sender: Any?) {
+        if latestUpdate != nil {
+            installUpdate()
+        } else {
+            checkForUpdates(showErrors: true)
+        }
+    }
+
+    private func checkForUpdates(showErrors: Bool) {
+        guard updateCheckTask == nil else { return }
+        updateItem?.isEnabled = false
+        updateView?.setTitle("Checking for Updates…")
+        updateCheckTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let update = try await updater.checkForUpdate()
+                latestUpdate = update
+                updateView?.setTitle(update.map { "Install Update \($0.version)" } ?? "Check for Updates…")
+            } catch {
+                latestUpdate = nil
+                updateView?.setTitle("Check for Updates…")
+                if showErrors { showError(error.localizedDescription) }
+            }
+            updateItem?.isEnabled = true
+            updateCheckTask = nil
+        }
+    }
+
+    private func installUpdate() {
+        guard let update = latestUpdate else { return }
+        closeMenu()
+        updateItem?.isEnabled = false
+        updateView?.setTitle("Installing Update…")
+        updateCheckTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await updater.install(update)
+                NSApp.terminate(nil)
+            } catch {
+                updateView?.setTitle("Install Update \(update.version)")
+                updateItem?.isEnabled = true
+                showError(error.localizedDescription)
+                updateCheckTask = nil
+            }
+        }
+    }
+
     @objc private func toggleLaunchAtLogin(_ sender: Any?) {
         closeMenu()
         let service = SMAppService.mainApp
@@ -781,6 +1093,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func showError(_ message: String) { let alert = NSAlert(); alert.messageText = "Codex LB Status"; alert.informativeText = message; alert.addButton(withTitle: "OK"); alert.runModal() }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        updateTimer?.invalidate()
+        updateCheckTask?.cancel()
         modelObservation?.cancel()
         heightObservation?.cancel()
     }

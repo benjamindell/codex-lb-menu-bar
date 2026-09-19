@@ -12,6 +12,7 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - Automatic refresh every 60 seconds and an immediate refresh button.
 - Native menu-row hover states and account links that open the selected account in `/accounts?selected=…`.
 - Native bottom-menu commands for opening the dashboard, configuring the server (including optional password authentication), launch-at-login, and quit.
+- GitHub Releases update checks with an install-and-relaunch action when a newer version is available.
 
 The menu also includes native AppKit commands for the dashboard, server URL configuration, login, and quit. It is read-only with respect to account state, so it cannot accidentally pause or mutate a connected account.
 
@@ -24,3 +25,23 @@ Requires macOS 13 or later and Xcode command-line tools:
 ```
 
 The default server is `http://127.0.0.1:2455`. Use the ellipsis menu at the bottom of the status menu to change it or log in.
+
+## Publishing an update
+
+The updater checks the latest release in the repository configured by
+`CodexLBUpdateRepository` in `Info.plist` (currently
+`benjamindell/codex-lb-menu-bar`). Each release must include an asset named
+`CodexLBStatus.zip` containing `CodexLBStatus.app` at any level inside the
+archive. The downloaded app must pass a macOS code-signature check before it
+can replace the installed app.
+
+To create the release asset:
+
+```bash
+./build.sh
+./script/package_release.sh
+```
+
+Increase `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`,
+then create a GitHub release whose tag is the new semantic version, such as
+`v1.1.0`, and upload `dist/CodexLBStatus.zip`.
