@@ -498,7 +498,7 @@ private struct MenuContentHeightKey: PreferenceKey {
 }
 
 private enum MenuLayout {
-    static let width: CGFloat = 454
+    static let width: CGFloat = 300
     static let hoverInset: CGFloat = 7
     static let rowPadding: CGFloat = 7
     // Every visible content edge uses this guide; backgrounds extend outward
