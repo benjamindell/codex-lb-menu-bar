@@ -32,7 +32,7 @@ private enum UpdateConfiguration {
     }
 
     static var assetName: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CodexLBUpdateAssetName") as? String ?? "CodexLBStatus.zip")
+        (Bundle.main.object(forInfoDictionaryKey: "CodexLBUpdateAssetName") as? String ?? "CodexLBMenuBar.zip")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -117,9 +117,9 @@ private enum UpdateError: LocalizedError {
         case .server(let status):
             return "GitHub returned HTTP \(status) while checking for updates."
         case .noCompatibleAsset:
-            return "The latest GitHub release does not contain a Codex LB Status update archive."
+            return "The latest GitHub release does not contain a Codex LB Menu Bar update archive."
         case .invalidArchive:
-            return "The downloaded update did not contain a Codex LB Status app."
+            return "The downloaded update did not contain a Codex LB Menu Bar app."
         case .unsignedArchive:
             return "The downloaded update failed its code-signature check."
         case .installFailed(let message):
@@ -142,7 +142,7 @@ private final class AppUpdater {
 
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("CodexLBStatus/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodexLBMenuBar/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw UpdateError.invalidResponse }
         guard response.statusCode == 200 else { throw UpdateError.server(response.statusCode) }
@@ -164,14 +164,14 @@ private final class AppUpdater {
     func install(_ update: AppUpdate) async throws {
         var request = URLRequest(url: update.assetURL)
         request.setValue("application/zip", forHTTPHeaderField: "Accept")
-        request.setValue("CodexLBStatus/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodexLBMenuBar/\(UpdateConfiguration.currentVersion)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             throw UpdateError.server((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
 
         let fileManager = FileManager.default
-        let workspace = fileManager.temporaryDirectory.appendingPathComponent("CodexLBStatus-update-\(UUID().uuidString)", isDirectory: true)
+        let workspace = fileManager.temporaryDirectory.appendingPathComponent("CodexLBMenuBar-update-\(UUID().uuidString)", isDirectory: true)
         do {
             try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
             let archive = workspace.appendingPathComponent("update.zip")
@@ -204,18 +204,22 @@ private final class AppUpdater {
 
     private func launchInstaller(workspace: URL, replacementApp: URL) throws {
         let currentApp = Bundle.main.bundleURL.standardizedFileURL
+        let replacementAppPath = replacementApp.path
+        let targetApp = currentApp.deletingLastPathComponent().appendingPathComponent(replacementApp.lastPathComponent)
         let scriptURL = workspace.appendingPathComponent("install-update.zsh")
         let script = """
         #!/bin/zsh
         set -euo pipefail
-        target=\(shellQuote(currentApp.path))
-        replacement=\(shellQuote(replacementApp.path))
+        old_target=\(shellQuote(currentApp.path))
+        target=\(shellQuote(targetApp.path))
+        replacement=\(shellQuote(replacementAppPath))
         workspace=\(shellQuote(workspace.path))
         pid=\(ProcessInfo.processInfo.processIdentifier)
         for _ in {1..120}; do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.25
         done
+        /bin/rm -rf "$old_target"
         /bin/rm -rf "$target"
         /usr/bin/ditto "$replacement" "$target"
         /usr/bin/open "$target"
@@ -824,7 +828,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             button.imagePosition = .imageLeading
             button.title = "LB"
             button.font = .systemFont(ofSize: 13, weight: .medium)
-            button.toolTip = "Codex LB status"
+            button.toolTip = "Codex LB Menu Bar"
         }
 
         // Assigning an NSMenu to the status item gives us the same native menu
@@ -929,9 +933,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(updateItem)
 
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit Codex LB Status", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Codex LB Menu Bar", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
         quitItem.target = self
-        quitItem.view = MenuActionItemView(title: "Quit Codex LB Status", trailing: "⌘Q")
+        quitItem.view = MenuActionItemView(title: "Quit Codex LB Menu Bar", trailing: "⌘Q")
         menu.addItem(quitItem)
     }
 
@@ -1023,7 +1027,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             }
             updateLaunchAtLoginItem()
             if service.status == .requiresApproval {
-                showError("Allow Codex LB Status in System Settings → General → Login Items to finish enabling launch at login.")
+                showError("Allow Codex LB Menu Bar in System Settings → General → Login Items to finish enabling launch at login.")
             }
         } catch {
             updateLaunchAtLoginItem()
@@ -1090,7 +1094,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         NSApp.terminate(nil)
     }
 
-    private func showError(_ message: String) { let alert = NSAlert(); alert.messageText = "Codex LB Status"; alert.informativeText = message; alert.addButton(withTitle: "OK"); alert.runModal() }
+    private func showError(_ message: String) { let alert = NSAlert(); alert.messageText = "Codex LB Menu Bar"; alert.informativeText = message; alert.addButton(withTitle: "OK"); alert.runModal() }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
         updateTimer?.invalidate()

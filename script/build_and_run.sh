@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="CodexLBStatus"
+APP_NAME="CodexLBMenuBar"
 BUNDLE_ID="com.codexlb.status"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"

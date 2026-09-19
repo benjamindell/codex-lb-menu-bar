@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/CodexLBStatus.app"
+APP="$ROOT/build/CodexLBMenuBar.app"
 DIST="$ROOT/dist"
-ARCHIVE="$DIST/CodexLBStatus.zip"
+ARCHIVE="$DIST/CodexLBMenuBar.zip"
 
 if [[ ! -d "$APP" ]]; then
   "$ROOT/build.sh"

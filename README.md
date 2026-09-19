@@ -1,4 +1,4 @@
-# Codex LB Status
+# Codex LB Menu Bar
 
 A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex-lb). It keeps the existing dashboard API contract and presents connected accounts in a native `NSMenu` hosted by the status item: grouped translucent cards, system typography, restrained colour, and clear hierarchy. AppKit owns menu anchoring, animation, keyboard handling, and dismissal.
 
@@ -31,7 +31,7 @@ The default server is `http://127.0.0.1:2455`. Use the ellipsis menu at the bott
 The updater checks the latest release in the repository configured by
 `CodexLBUpdateRepository` in `Info.plist` (currently
 `benjamindell/codex-lb-menu-bar`). Each release must include an asset named
-`CodexLBStatus.zip` containing `CodexLBStatus.app` at any level inside the
+`CodexLBMenuBar.zip` containing `CodexLBMenuBar.app` at any level inside the
 archive. The downloaded app must pass a macOS code-signature check before it
 can replace the installed app.
 
@@ -44,4 +44,4 @@ To create the release asset:
 
 Increase `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`,
 then create a GitHub release whose tag is the new semantic version, such as
-`v1.1.0`, and upload `dist/CodexLBStatus.zip`.
+`v1.1.0`, and upload `dist/CodexLBMenuBar.zip`.
