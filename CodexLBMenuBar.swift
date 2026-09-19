@@ -750,17 +750,22 @@ private func relativeUpdated(_ date: Date) -> String {
 private final class MenuActionItemView: NSView {
     private let titleField: NSTextField
     private let trailingField: NSTextField
+    private let activateAction: () -> Void
     private(set) var isHighlighted = false
+    private var isActionEnabled = true
 
     override var intrinsicContentSize: NSSize { NSSize(width: MenuLayout.width, height: 24) }
 
-    init(title: String, trailing: String = "") {
+    init(title: String, trailing: String = "", action: @escaping () -> Void = {}) {
         titleField = NSTextField(labelWithString: title)
         trailingField = NSTextField(labelWithString: trailing)
+        activateAction = action
         super.init(frame: NSRect(x: 0, y: 0, width: MenuLayout.width, height: 24))
         titleField.font = .menuFont(ofSize: 0)
         trailingField.font = .menuFont(ofSize: 0)
         trailingField.alignment = .right
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        trailingField.translatesAutoresizingMaskIntoConstraints = false
         titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         trailingField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(titleField)
@@ -781,6 +786,26 @@ private final class MenuActionItemView: NSView {
     func setTitle(_ value: String) { titleField.stringValue = value }
 
     func setTrailing(_ value: String) { trailingField.stringValue = value }
+
+    func setEnabled(_ enabled: Bool) {
+        isActionEnabled = enabled
+        alphaValue = enabled ? 1 : 0.55
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isActionEnabled else { return }
+        setHighlighted(true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isActionEnabled else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        setHighlighted(false)
+        guard bounds.contains(location) else { return }
+        activateAction()
+    }
 
     func setHighlighted(_ highlighted: Bool) {
         isHighlighted = highlighted
@@ -907,17 +932,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func addNativeActionItems() {
         let dashboardItem = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboardFromMenu(_:)), keyEquivalent: "")
         dashboardItem.target = self
-        dashboardItem.view = MenuActionItemView(title: "Open Dashboard")
+        dashboardItem.view = MenuActionItemView(title: "Open Dashboard", action: { [weak self] in self?.openDashboard() })
         menu.addItem(dashboardItem)
 
         let serverItem = NSMenuItem(title: "Config Server…", action: #selector(configureServerFromMenu(_:)), keyEquivalent: "")
         serverItem.target = self
-        serverItem.view = MenuActionItemView(title: "Config Server…")
+        serverItem.view = MenuActionItemView(title: "Config Server…", action: { [weak self] in self?.configureServer() })
         menu.addItem(serverItem)
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         launchItem.target = self
-        let launchView = MenuActionItemView(title: "Launch at Login")
+        let launchView = MenuActionItemView(title: "Launch at Login", action: { [weak self] in self?.toggleLaunchAtLogin(nil) })
         launchItem.view = launchView
         launchAtLoginView = launchView
         launchAtLoginItem = launchItem
@@ -926,7 +951,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
         let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesFromMenu(_:)), keyEquivalent: "")
         updateItem.target = self
-        let updateView = MenuActionItemView(title: "Check for Updates…")
+        let updateView = MenuActionItemView(title: "Check for Updates…", action: { [weak self] in self?.checkForUpdatesFromMenu(nil) })
         updateItem.view = updateView
         self.updateItem = updateItem
         self.updateView = updateView
@@ -935,7 +960,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit Codex LB Menu Bar", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
         quitItem.target = self
-        quitItem.view = MenuActionItemView(title: "Quit Codex LB Menu Bar", trailing: "⌘Q")
+        quitItem.view = MenuActionItemView(title: "Quit Codex LB Menu Bar", trailing: "⌘Q", action: { [weak self] in self?.quit() })
         menu.addItem(quitItem)
     }
 
@@ -980,6 +1005,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func checkForUpdates(showErrors: Bool) {
         guard updateCheckTask == nil else { return }
         updateItem?.isEnabled = false
+        updateView?.setEnabled(false)
         updateView?.setTitle("Checking for Updates…")
         updateCheckTask = Task { [weak self] in
             guard let self else { return }
@@ -993,6 +1019,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                 if showErrors { showError(error.localizedDescription) }
             }
             updateItem?.isEnabled = true
+            updateView?.setEnabled(true)
             updateCheckTask = nil
         }
     }
@@ -1001,6 +1028,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         guard let update = latestUpdate else { return }
         closeMenu()
         updateItem?.isEnabled = false
+        updateView?.setEnabled(false)
         updateView?.setTitle("Installing Update…")
         updateCheckTask = Task { [weak self] in
             guard let self else { return }
@@ -1010,6 +1038,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             } catch {
                 updateView?.setTitle("Install Update \(update.version)")
                 updateItem?.isEnabled = true
+                updateView?.setEnabled(true)
                 showError(error.localizedDescription)
                 updateCheckTask = nil
             }
