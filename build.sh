@@ -13,6 +13,7 @@ swiftc -O -whole-module-optimization \
   "$ROOT/StatusBarLogic.swift" "$ROOT/CredentialStore.swift" "$ROOT/CodexLBMenuBar.swift" \
   -o "$APP/Contents/MacOS/CodexLBMenuBar"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Resources/ChatGPTLogo.svg" "$APP/Contents/Resources/ChatGPTLogo.svg"
 # A stable designated requirement lets Keychain recognize future ad-hoc signed
 # auto-updates as the same app instead of tying access to one build's CDHash.
 codesign --force --deep --sign - \

@@ -897,7 +897,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Codex LB")
+            button.image = menuBarIcon()
             button.imagePosition = .imageLeading
             button.title = "LB"
             button.font = .systemFont(ofSize: 13, weight: .medium)
@@ -932,6 +932,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             Task { @MainActor in self?.checkForUpdates(showErrors: false) }
         }
         viewModel.refresh()
+    }
+
+    private func menuBarIcon() -> NSImage {
+        if let resourceURL = Bundle.main.url(forResource: "ChatGPTLogo", withExtension: "svg"),
+           let image = NSImage(contentsOf: resourceURL) {
+            image.isTemplate = true
+            image.size = NSSize(width: 17, height: 17)
+            image.accessibilityDescription = "Codex LB"
+            return image
+        }
+
+        // Keep the status item usable if an older/incomplete app bundle is
+        // launched before the new resource has been copied into place.
+        return NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Codex LB")!
     }
 
     private func makeHostingView(height: CGFloat) -> NSHostingView<MenuContentView> {
