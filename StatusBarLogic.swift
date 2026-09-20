@@ -1,5 +1,27 @@
 import Foundation
 
+enum AuthenticationRecoveryAction: Equatable {
+    case none
+    case useStoredPassword
+    case requireLogin
+}
+
+func authenticationRecoveryAction(
+    authenticated: Bool,
+    passwordRequired: Bool,
+    hasStoredPassword: Bool,
+    automaticRetryAllowed: Bool
+) -> AuthenticationRecoveryAction {
+    if authenticated { return .none }
+    if passwordRequired && hasStoredPassword && automaticRetryAllowed { return .useStoredPassword }
+    return .requireLogin
+}
+
+func credentialAccount(for serverURL: String) -> String {
+    let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+}
+
 enum QuotaTone {
     case healthy, watch, critical
 }
@@ -56,4 +78,3 @@ func menuBarTitle(primary: Double?, secondary: Double?) -> String {
     if let secondary { return "\(Int(secondary.rounded()))%" }
     return "LB"
 }
-

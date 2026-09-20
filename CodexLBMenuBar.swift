@@ -251,12 +251,14 @@ private final class AppUpdater {
 }
 
 private enum ClientError: LocalizedError {
-    case invalidURL(String), unauthorized, server(Int, String), transport(String)
+    case invalidURL(String), unauthorized, savedPasswordRejected, twoFactorRequired, server(Int, String), transport(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL(let value): return "Invalid server URL: \(value)"
         case .unauthorized: return "Dashboard login required"
+        case .savedPasswordRejected: return "The saved dashboard password was rejected. Open Config Server… and enter the current password."
+        case .twoFactorRequired: return "Two-factor authentication is required. Open Config Server… to finish logging in."
         case .server(let code, let body): return body.isEmpty ? "Server returned HTTP \(code)" : "Server returned HTTP \(code): \(body)"
         case .transport(let message): return message
         }
@@ -406,7 +408,9 @@ private final class StatusViewModel: ObservableObject {
 
     let settings: SettingsStore
     private var client: CodexLBClient
+    private let passwordStore = KeychainPasswordStore()
     private var refreshTask: Task<Void, Never>?
+    private var automaticLoginFailedAccount: String?
 
     init(settings: SettingsStore) {
         self.settings = settings
@@ -459,7 +463,8 @@ private final class StatusViewModel: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            _ = try await client.getSession()
+            let session = try await client.getSession()
+            try await recoverAuthenticationIfNeeded(session)
             let value = try await client.fetchOverview()
             overview = value
             serverVersion = client.serverVersion
@@ -471,17 +476,64 @@ private final class StatusViewModel: ObservableObject {
         }
     }
 
-    func changeServerURL(_ value: String) {
+    private func recoverAuthenticationIfNeeded(_ session: AuthSession) async throws {
+        let account = credentialAccount(for: settings.baseURLString)
+        let password = try passwordStore.password(for: settings.baseURLString)
+        let action = authenticationRecoveryAction(
+            authenticated: session.authenticated,
+            passwordRequired: session.passwordRequired,
+            hasStoredPassword: password != nil,
+            automaticRetryAllowed: automaticLoginFailedAccount != account
+        )
+
+        switch action {
+        case .none:
+            automaticLoginFailedAccount = nil
+        case .requireLogin:
+            throw ClientError.unauthorized
+        case .useStoredPassword:
+            guard let password else { throw ClientError.unauthorized }
+            do {
+                let recovered = try await client.loginPassword(password)
+                if recovered.totpRequiredOnLogin {
+                    automaticLoginFailedAccount = account
+                    throw ClientError.twoFactorRequired
+                }
+                guard recovered.authenticated else {
+                    automaticLoginFailedAccount = account
+                    throw ClientError.savedPasswordRejected
+                }
+                automaticLoginFailedAccount = nil
+            } catch ClientError.unauthorized {
+                automaticLoginFailedAccount = account
+                throw ClientError.savedPasswordRejected
+            }
+        }
+    }
+
+    func changeServerURL(_ value: String, refreshImmediately: Bool = true) {
         settings.baseURLString = value
         client = CodexLBClient(settings: settings)
-        refresh()
+        automaticLoginFailedAccount = nil
+        if refreshImmediately { refresh() }
     }
 
     func loginAdmin(password: String) async throws -> Bool {
         let session = try await client.loginPassword(password)
+        try passwordStore.save(password, for: settings.baseURLString)
+        automaticLoginFailedAccount = nil
         if session.totpRequiredOnLogin { return true }
         refresh()
         return false
+    }
+
+    func hasSavedPassword(for serverURL: String) -> Bool {
+        (try? passwordStore.password(for: serverURL)) != nil
+    }
+
+    func forgetSavedPassword() throws {
+        try passwordStore.deletePassword(for: settings.baseURLString)
+        automaticLoginFailedAccount = credentialAccount(for: settings.baseURLString)
     }
 
     func verifyTotp(_ code: String) async throws { _ = try await client.verifyTotp(code); refresh() }
@@ -1065,7 +1117,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         closeMenu()
         let alert = NSAlert()
         alert.messageText = "Codex LB Server"
-        alert.informativeText = "Update the dashboard address and optionally authenticate. The password is not stored."
+        alert.informativeText = "Passwords are stored securely in your Mac login Keychain and reused when the dashboard session expires."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
@@ -1073,13 +1125,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let urlField = NSTextField(string: settings.baseURLString)
         let passwordLabel = NSTextField(labelWithString: "Password")
         let passwordField = NSSecureTextField(string: "")
-        passwordField.placeholderString = "Leave blank if not required"
+        passwordField.placeholderString = viewModel.hasSavedPassword(for: settings.baseURLString)
+            ? "Saved in Keychain — leave blank to keep"
+            : "Enter password if required"
+        let forgetPassword = NSButton(checkboxWithTitle: "Forget saved password", target: nil, action: nil)
 
-        let form = NSStackView(views: [urlLabel, urlField, passwordLabel, passwordField])
+        let form = NSStackView(views: [urlLabel, urlField, passwordLabel, passwordField, forgetPassword])
         form.orientation = .vertical
         form.alignment = .leading
         form.spacing = 5
-        form.frame = NSRect(x: 0, y: 0, width: 360, height: 86)
+        form.frame = NSRect(x: 0, y: 0, width: 360, height: 112)
         NSLayoutConstraint.activate([
             urlField.widthAnchor.constraint(equalToConstant: 360),
             passwordField.widthAnchor.constraint(equalToConstant: 360),
@@ -1089,7 +1144,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let password = passwordField.stringValue
-        viewModel.changeServerURL(urlField.stringValue)
+        let shouldForgetPassword = forgetPassword.state == .on && password.isEmpty
+        viewModel.changeServerURL(
+            urlField.stringValue,
+            refreshImmediately: password.isEmpty && !shouldForgetPassword
+        )
+
+        if shouldForgetPassword {
+            do {
+                try viewModel.forgetSavedPassword()
+                viewModel.refresh()
+            } catch { showError(error.localizedDescription) }
+            return
+        }
         guard !password.isEmpty else { return }
 
         Task {

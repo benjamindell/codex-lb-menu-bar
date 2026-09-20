@@ -11,10 +11,15 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - Warm-up state, optional attempt counts, and the latest warm-up result.
 - Automatic refresh every 60 seconds and an immediate refresh button.
 - Native menu-row hover states and account links that open the selected account in `/accounts?selected=…`.
-- Native bottom-menu commands for opening the dashboard, configuring the server (including optional password authentication), launch-at-login, and quit.
+- Native bottom-menu commands for opening the dashboard, configuring the server (including optional password authentication stored in macOS Keychain), launch-at-login, and quit.
 - GitHub Releases update checks with an install-and-relaunch action when a newer version is available.
 
 The menu also includes native AppKit commands for the dashboard, server URL configuration, login, and quit. It is read-only with respect to account state, so it cannot accidentally pause or mutate a connected account.
+
+Dashboard passwords are stored per server in the user's macOS login Keychain,
+never in preferences or ordinary files. When the server-side session expires,
+the app uses the saved password to establish a new session automatically. The
+saved password can be removed from **Config Server…** at any time.
 
 ## Build and run
 
