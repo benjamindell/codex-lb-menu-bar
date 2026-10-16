@@ -8,13 +8,16 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - Every connected Codex LB account, including status and email/account identity.
 - 5-hour, weekly, and monthly progress bars with colour-coded remaining capacity.
 - Relative reset times such as `Reset in 2d 4h` rather than calendar dates.
-- Warm-up state, optional attempt counts, and the latest warm-up result.
+- Available reset counts per account, with a Sonos-style dropdown showing each reset and its expiry.
+- A full-width **Use next reset** action, which asks for confirmation before spending the soonest-expiring reset.
+- Loading and applying indicators, plus safe retries that reuse the same request ID after a timeout or app restart.
+- The latest warm-up result when provided by the server.
 - Automatic refresh every 60 seconds and an immediate refresh button.
 - Rounded account cards with hover states and account links that open the selected account in `/accounts?selected=…`.
 - Footer buttons for Settings, Dashboard, Refresh, and Quit. Settings contains server configuration, launch-at-login, and update checks.
 - GitHub Releases update checks with an install-and-relaunch action when a newer version is available.
 
-The panel is read-only with respect to account state, so it cannot accidentally pause or mutate a connected account.
+Viewing reset credits is read-only. Applying a reset requires dashboard write access and explicit confirmation. The server selects the next available reset to expire; individual credits are informational rows. If a request times out, **Retry same reset** checks the original operation instead of spending another credit. Pending request IDs are stored per server and account in preferences; credentials remain in Keychain.
 
 Dashboard passwords are stored per server in the user's macOS login Keychain,
 never in preferences or ordinary files. When the server-side session expires,
@@ -39,12 +42,16 @@ To open the panel immediately for UI inspection, launch the built app with:
 
 This inspection mode activates the app and shows a Dock icon. Normal launches remain menu-bar-only.
 
-Run the logic and dropdown placement checks with:
+Run the logic, dropdown placement, and mocked reset checks with:
 
 ```bash
 swiftc StatusBarLogic.swift DropdownPlacement.swift CredentialStore.swift StatusBarLogicTests.swift -framework Security -o build/StatusBarLogicTests
 ./build/StatusBarLogicTests
+swiftc -parse-as-library ResetCredits.swift ResetCreditsTests.swift -o build/ResetCreditsTests
+./build/ResetCreditsTests
 ```
+
+The reset tests use a fake API and never spend live credits.
 
 ## Publishing an update
 

@@ -51,28 +51,30 @@ private struct QuotaRow: View {
     let title: String
     let value: Double?
     let resetAt: Date?
-    var warmupText: String? = nil
-    var warmupEnabled = false
+    let openAccount: () -> Void
+    var resetButton: AnyView? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                Spacer()
-                Text("\(roundedPercent(value)) left")
-                    .font(.system(size: 11, weight: .medium)).monospacedDigit()
-            }
-            QuotaBar(value: value)
-            HStack(spacing: 8) {
-                Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
-                    .foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: 0)
-                if let warmupText {
-                    Label(warmupText, systemImage: warmupEnabled ? "bolt.fill" : "bolt.slash")
-                        .labelStyle(CompactLabelStyle())
-                        .foregroundStyle(warmupEnabled ? Color.blue : Color.secondary)
-                        .fixedSize()
+            Button(action: openAccount) {
+                VStack(spacing: 6) {
+                    HStack {
+                        Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(roundedPercent(value)) left")
+                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    }
+                    QuotaBar(value: value)
                 }
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            HStack(spacing: 8) {
+                Button(action: openAccount) {
+                    Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
+                        .foregroundStyle(.secondary).lineLimit(1)
+                }.buttonStyle(.plain)
+                Spacer(minLength: 0)
+                if let resetButton { resetButton }
             }
             .font(.system(size: 10))
         }
@@ -81,6 +83,7 @@ private struct QuotaRow: View {
 
 private struct AccountCard: View {
     let account: AccountSummary
+    @ObservedObject var model: StatusViewModel
     let openAccount: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -88,15 +91,13 @@ private struct AccountCard: View {
     private var hasPrimary: Bool { account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil }
     private var hasWeekly: Bool { account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil }
     private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
-
-    private var warmupText: String {
-        warmupLabel(enabled: account.limitWarmupEnabled == true,
-                    attemptCount: account.limitWarmup?.attempts ?? account.limitWarmup?.attemptCount)
+    private var resetButton: AnyView {
+        AnyView(ResetCreditButton(account: account, store: model.resetStore(for: account), model: model))
     }
 
     var body: some View {
-        Button(action: openAccount) {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: openAccount) {
                 HStack(spacing: 11) {
                     Image(systemName: "person.crop.circle")
                         .font(.system(size: 17))
@@ -113,45 +114,43 @@ private struct AccountCard: View {
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium))
                         .foregroundStyle(hovered ? Color.blue : Color.secondary)
                 }
-                if hasPrimary {
-                    QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
-                             warmupText: !hasWeekly && !hasMonthly ? warmupText : nil, warmupEnabled: account.limitWarmupEnabled == true)
-                }
-                if hasWeekly {
-                    QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary,
-                             warmupText: !hasMonthly ? warmupText : nil, warmupEnabled: account.limitWarmupEnabled == true)
-                }
-                if hasMonthly {
-                    QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
-                             warmupText: warmupText, warmupEnabled: account.limitWarmupEnabled == true)
-                }
-                if !hasPrimary && !hasWeekly && !hasMonthly {
-                    HStack {
-                        Spacer()
-                        Label(warmupText, systemImage: account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash")
-                            .labelStyle(CompactLabelStyle())
-                            .foregroundStyle(account.limitWarmupEnabled == true ? Color.blue : Color.secondary)
-                    }
-                    .font(.system(size: 10))
-                }
-                if let warmup = account.limitWarmup {
-                    Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                if let reason = account.deactivationReason, !reason.isEmpty {
-                    Text(reason).font(.system(size: 10)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .panelCard()
-            .overlay(RoundedRectangle(cornerRadius: 18).fill(.primary.opacity(hovered ? 0.035 : 0)))
-            .contentShape(RoundedRectangle(cornerRadius: 18))
+            .buttonStyle(.plain)
+            .help("Open \(account.title) in Codex LB")
+            if hasPrimary {
+                QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
+                         openAccount: openAccount, resetButton: !hasWeekly && !hasMonthly ? resetButton : nil)
+            }
+            if hasWeekly {
+                QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary,
+                         openAccount: openAccount, resetButton: !hasMonthly ? resetButton : nil)
+            }
+            if hasMonthly {
+                QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
+                         openAccount: openAccount, resetButton: resetButton)
+            }
+            if !hasPrimary && !hasWeekly && !hasMonthly {
+                HStack { Spacer(); resetButton }
+            }
+            if let warmup = account.limitWarmup {
+                Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if let reason = account.deactivationReason, !reason.isEmpty {
+                Text(reason).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .panelCard()
+        .background {
+            Button(action: openAccount) { Color.clear.contentShape(RoundedRectangle(cornerRadius: 18)) }
+                .buttonStyle(.plain).accessibilityHidden(true)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 18).fill(.primary.opacity(hovered ? 0.035 : 0)).allowsHitTesting(false))
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: hovered)
-        .help("Open \(account.title) in Codex LB")
     }
 }
 
@@ -179,7 +178,7 @@ struct MenuContentView: View {
                 VStack(spacing: 12) {
                     if !sortedAccounts.isEmpty {
                         ForEach(sortedAccounts) { account in
-                            AccountCard(account: account) { openAccount(account) }
+                            AccountCard(account: account, model: model) { openAccount(account) }
                         }
                     } else if model.errorMessage == nil {
                         emptyState

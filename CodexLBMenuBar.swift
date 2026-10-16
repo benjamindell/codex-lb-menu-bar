@@ -324,7 +324,7 @@ struct AccountLimitWarmupStatus: Decodable {
     let attemptCount: Int?
 }
 
-private final class CodexLBClient {
+private final class CodexLBClient: ResetCreditAPI {
     private let settings: SettingsStore
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -357,6 +357,15 @@ private final class CodexLBClient {
     func verifyTotp(_ code: String) async throws -> AuthSession {
         let body = try JSONSerialization.data(withJSONObject: ["code": code])
         return try await request(path: "/api/dashboard-auth/totp/verify", method: "POST", body: body)
+    }
+
+    func fetchResetCredits(accountID: String) async throws -> ResetCreditSnapshot? {
+        try await request(path: ResetCreditRequest.path(accountID: accountID))
+    }
+
+    func consumeResetCredit(accountID: String, requestID: String) async throws -> ResetCreditResult {
+        let body = try ResetCreditRequest.body(requestID: requestID)
+        return try await request(path: ResetCreditRequest.path(accountID: accountID) + "/consume", method: "POST", body: body)
     }
 
     private func request<T: Decodable>(path: String, method: String = "GET", body: Data? = nil) async throws -> T {
@@ -405,16 +414,31 @@ final class StatusViewModel: ObservableObject {
     @Published var serverVersion: String?
     @Published var availableHeight: CGFloat = 720
     @Published var measuredContentHeight: CGFloat?
+    @Published var resetPopoverAccountID: String?
+    var resetConfirmationVisible = false
+    private var resetStores: [String: ResetCreditStore] = [:]
 
     let settings: SettingsStore
     private var client: CodexLBClient
     private let passwordStore = KeychainPasswordStore()
     private var refreshTask: Task<Void, Never>?
+    private var refreshAfterCurrent = false
     private var automaticLoginFailedAccount: String?
 
     init(settings: SettingsStore) {
         self.settings = settings
         client = CodexLBClient(settings: settings)
+    }
+
+    func resetStore(for account: AccountSummary) -> ResetCreditStore {
+        if let store = resetStores[account.accountId] { return store }
+        let store = ResetCreditStore(accountID: account.accountId, server: settings.baseURLString, api: client) { [weak self] in
+            guard let self else { return }
+            if self.isRefreshing { self.refreshAfterCurrent = true }
+            else { self.refresh() }
+        }
+        resetStores[account.accountId] = store
+        return store
     }
 
     var activeCount: Int { overview?.accounts.filter { $0.status == "active" }.count ?? 0 }
@@ -437,7 +461,13 @@ final class StatusViewModel: ObservableObject {
 
     private func performRefresh() async {
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            isRefreshing = false
+            if refreshAfterCurrent {
+                refreshAfterCurrent = false
+                refresh()
+            }
+        }
         do {
             let session = try await client.getSession()
             try await recoverAuthenticationIfNeeded(session)
@@ -488,6 +518,8 @@ final class StatusViewModel: ObservableObject {
     }
 
     func changeServerURL(_ value: String, refreshImmediately: Bool = true) {
+        resetPopoverAccountID = nil
+        resetStores.removeAll()
         settings.baseURLString = value
         client = CodexLBClient(settings: settings)
         automaticLoginFailedAccount = nil
@@ -644,7 +676,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self?.closeMenu() }
         }
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents.union(.keyDown)) { [weak self] event in
-            guard let self else { return event }
+            guard let self, !self.viewModel.resetConfirmationVisible else { return event }
             if event.type == .keyDown {
                 // Let an open Settings menu handle Escape before closing the panel.
                 if event.keyCode == 53, event.window === self.panel {
@@ -686,6 +718,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func closeMenu() {
+        guard !viewModel.resetConfirmationVisible else { return }
+        viewModel.resetPopoverAccountID = nil
         panel.orderOut(nil)
         placement.close()
         stopDismissalMonitors()
