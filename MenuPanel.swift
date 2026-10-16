@@ -51,6 +51,8 @@ private struct QuotaRow: View {
     let title: String
     let value: Double?
     let resetAt: Date?
+    var warmupText: String? = nil
+    var warmupEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -61,8 +63,17 @@ private struct QuotaRow: View {
                     .font(.system(size: 11, weight: .medium)).monospacedDigit()
             }
             QuotaBar(value: value)
-            Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
+                    .foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                if let warmupText {
+                    Label(warmupText, systemImage: warmupEnabled ? "bolt.fill" : "bolt.slash")
+                        .foregroundStyle(warmupEnabled ? Color.blue : Color.secondary)
+                        .fixedSize()
+                }
+            }
+            .font(.system(size: 10))
         }
     }
 }
@@ -72,6 +83,10 @@ private struct AccountCard: View {
     let openAccount: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var hasPrimary: Bool { account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil }
+    private var hasWeekly: Bool { account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil }
+    private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
 
     private var warmupText: String {
         warmupLabel(enabled: account.limitWarmupEnabled == true,
@@ -97,24 +112,30 @@ private struct AccountCard: View {
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium))
                         .foregroundStyle(hovered ? Color.blue : Color.secondary)
                 }
-                if account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil {
-                    QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary)
+                if hasPrimary {
+                    QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
+                             warmupText: !hasWeekly && !hasMonthly ? warmupText : nil, warmupEnabled: account.limitWarmupEnabled == true)
                 }
-                if account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil {
-                    QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary)
+                if hasWeekly {
+                    QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary,
+                             warmupText: !hasMonthly ? warmupText : nil, warmupEnabled: account.limitWarmupEnabled == true)
                 }
-                if account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil {
-                    QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly)
+                if hasMonthly {
+                    QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
+                             warmupText: warmupText, warmupEnabled: account.limitWarmupEnabled == true)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(warmupText, systemImage: account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash")
-                        .foregroundStyle(account.limitWarmupEnabled == true ? Color.blue : Color.secondary)
-                    if let warmup = account.limitWarmup {
-                        Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")
-                            .foregroundStyle(.secondary)
+                if !hasPrimary && !hasWeekly && !hasMonthly {
+                    HStack {
+                        Spacer()
+                        Label(warmupText, systemImage: account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash")
+                            .foregroundStyle(account.limitWarmupEnabled == true ? Color.blue : Color.secondary)
                     }
+                    .font(.system(size: 10))
                 }
-                .font(.system(size: 10))
+                if let warmup = account.limitWarmup {
+                    Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
                 if let reason = account.deactivationReason, !reason.isEmpty {
                     Text(reason).font(.system(size: 10)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -141,8 +162,7 @@ struct MenuContentView: View {
     let toggleLaunchAtLogin: () -> Void
     let checkForUpdates: () -> Void
     let quit: () -> Void
-    @State private var settingsHovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var settingsMenuAnchor = NSView()
 
     private var sortedAccounts: [AccountSummary] {
         (model.overview?.accounts ?? []).sorted {
@@ -156,7 +176,6 @@ struct MenuContentView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     if !sortedAccounts.isEmpty {
-                        summary
                         ForEach(sortedAccounts) { account in
                             AccountCard(account: account) { openAccount(account) }
                         }
@@ -205,40 +224,23 @@ struct MenuContentView: View {
             Spacer()
             if model.isRefreshing { ProgressView().controlSize(.small).frame(width: 14, height: 14) }
             HStack(spacing: 5) {
-                Circle().fill(model.errorMessage != nil ? .orange : model.overview != nil ? .green : .secondary)
-                    .frame(width: 5, height: 5)
-                Text(model.errorMessage != nil ? "Offline" : model.overview != nil ? "Connected" : "Connecting")
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                let remaining = model.primaryAverage ?? model.secondaryAverage
+                Circle().fill(quotaTint(for: remaining)).frame(width: 5, height: 5)
+                Text(remaining.map { "\(roundedPercent($0)) remaining" }
+                     ?? (model.errorMessage != nil ? "Offline" : model.isRefreshing ? "Connecting" : "No usage"))
+                    .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(.secondary)
             }
         }
         .padding(.bottom, 2)
+        .help(headerHelp)
     }
 
-    private var summary: some View {
-        VStack(spacing: 12) {
-            SectionHeading(title: "REMAINING CAPACITY", detail: "\(model.activeCount) of \(model.totalCount) active")
-            HStack(spacing: 16) {
-                summaryMetric("5-hour", value: model.primaryAverage)
-                Divider().frame(height: 36)
-                summaryMetric("Weekly", value: model.secondaryAverage)
-            }
-            HStack {
-                Text(model.lastRefreshedAt.map { "Updated \(relativeUpdated($0))" } ?? "Auto-refreshes every minute")
-                Spacer()
-                if let version = model.serverVersion { Text("Server \(version)").lineLimit(1) }
-            }
-            .font(.system(size: 10)).foregroundStyle(.secondary)
-        }
-        .panelCard()
-    }
-
-    private func summaryMetric(_ title: String, value: Double?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Text(roundedPercent(value)).font(.system(size: 22, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(quotaTint(for: value))
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var headerHelp: String {
+        let window = model.primaryAverage != nil ? "5-hour" : "Weekly"
+        var details = ["\(window) average remaining capacity", "\(model.activeCount) of \(model.totalCount) accounts active"]
+        if let date = model.lastRefreshedAt { details.append("Updated \(relativeUpdated(date))") }
+        if let version = model.serverVersion { details.append("Server \(version)") }
+        return details.joined(separator: "\n")
     }
 
     private var emptyState: some View {
@@ -268,24 +270,13 @@ struct MenuContentView: View {
 
     private var footer: some View {
         HStack(spacing: 4) {
-            Menu {
-                Button("Config Server…", action: configureServer)
-                Button(action: toggleLaunchAtLogin) {
-                    if actions.launchAtLogin { Label("Launch at Login", systemImage: "checkmark") }
-                    else { Text("Launch at Login") }
-                }
-                Divider()
-                Button(actions.updateTitle, action: checkForUpdates).disabled(actions.updateBusy)
-            } label: {
+            Button(action: showSettingsMenu) {
                 Label("Settings", systemImage: "gearshape")
                     .font(.system(size: 12, weight: .medium))
-                    .padding(.horizontal, 16).frame(height: 32)
+                    .padding(.horizontal, 12).frame(height: 32)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .tint(.secondary)
-            .background(.primary.opacity(settingsHovered ? 0.10 : 0.045), in: RoundedRectangle(cornerRadius: 10))
-            .onHover { settingsHovered = $0 }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: settingsHovered)
+            .buttonStyle(HoverButtonStyle(isCard: true))
+            .background(SettingsMenuAnchor(view: settingsMenuAnchor))
             Button(action: openDashboard) {
                 Label("Dashboard", systemImage: "chart.bar.xaxis")
                     .font(.system(size: 12, weight: .medium))
@@ -301,6 +292,42 @@ struct MenuContentView: View {
         .foregroundStyle(.secondary)
         .padding(.top, 2)
     }
+
+    private func showSettingsMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(SettingsMenuItem(title: "Config Server…", action: configureServer))
+        let launchItem = SettingsMenuItem(title: "Launch at Login", action: toggleLaunchAtLogin)
+        launchItem.state = actions.launchAtLogin ? .on : .off
+        menu.addItem(launchItem)
+        menu.addItem(.separator())
+        let updateItem = SettingsMenuItem(title: actions.updateTitle, action: checkForUpdates)
+        updateItem.isEnabled = !actions.updateBusy
+        menu.addItem(updateItem)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: settingsMenuAnchor)
+    }
+
+}
+
+// The visible control uses the same SwiftUI Button as Dashboard. This view only
+// supplies the native menu's anchor, so NSMenu cannot override the button size.
+private struct SettingsMenuAnchor: NSViewRepresentable {
+    let view: NSView
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+@MainActor private final class SettingsMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, action: @escaping () -> Void) {
+        handler = action
+        super.init(title: title, action: #selector(activate), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func activate() { handler() }
 }
 
 private func relativeUpdated(_ date: Date) -> String {
