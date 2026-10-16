@@ -4,7 +4,7 @@ struct ResetCreditButton: View {
     let account: AccountSummary
     @ObservedObject var store: ResetCreditStore
     @ObservedObject var model: StatusViewModel
-    @State private var hovered = false
+    let isCardHovered: Bool
 
     private var isPresented: Binding<Bool> {
         Binding(get: { model.resetPopoverAccountID == account.id },
@@ -34,30 +34,27 @@ struct ResetCreditButton: View {
                 }
             }
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(isDisabled ? Color.primary.opacity(0.18) : hovered ? Color.blue : Color.secondary)
             .frame(width: 30, height: 30)
-            .background(.primary.opacity(hovered && !isDisabled ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .topTrailing) {
                 if let count = availableCount, count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 9, weight: .semibold)).monospacedDigit()
+                        .font(.system(size: 7, weight: .semibold)).monospacedDigit()
                         .foregroundStyle(.white)
                         .lineLimit(1).minimumScaleFactor(0.5)
-                        .frame(width: 16, height: 16)
-                        .background(.blue, in: Circle())
-                        .offset(x: 3, y: -3)
+                        .frame(width: 12, height: 12)
+                        .background(isCardHovered ? Color.blue : Color(nsColor: .darkGray), in: Circle())
+                        .offset(x: 2, y: -2)
                         .accessibilityHidden(true)
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(isCard: true, isLoading: store.isApplying || store.isLoading))
         .disabled(isDisabled)
         .fixedSize()
         .help("\(countText) for \(account.email)")
         .accessibilityLabel("\(countText) for \(account.email)")
         .accessibilityValue(isPresented.wrappedValue ? "Expanded" : "Collapsed")
-        .onHover { hovered = $0 }
         .onChange(of: account.availableResetCredits) { _ in
             if store.snapshot != nil { Task { await store.load() } }
         }
