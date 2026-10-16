@@ -1,6 +1,6 @@
 # Codex LB Menu Bar
 
-A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex-lb). It keeps the existing dashboard API contract and presents connected accounts in a native `NSMenu` hosted by the status item: grouped translucent cards, system typography, restrained colour, and clear hierarchy. AppKit owns menu anchoring, animation, keyboard handling, and dismissal.
+A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex-lb). It keeps the dashboard API contract and uses the same 384-point borderless panel, material, rounded cards, typography, and footer controls as Sonos Bar. The header and footer stay visible while long account lists scroll. Click outside or press Escape to dismiss the panel.
 
 ## What it shows
 
@@ -10,11 +10,11 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - Relative reset times such as `Reset in 2d 4h` rather than calendar dates.
 - Warm-up state, optional attempt counts, and the latest warm-up result.
 - Automatic refresh every 60 seconds and an immediate refresh button.
-- Native menu-row hover states and account links that open the selected account in `/accounts?selected=…`.
-- Native bottom-menu commands for opening the dashboard, configuring the server (including optional password authentication stored in macOS Keychain), launch-at-login, and quit.
+- Rounded account cards with hover states and account links that open the selected account in `/accounts?selected=…`.
+- Footer buttons for Settings, Dashboard, Refresh, and Quit. Settings contains server configuration, launch-at-login, and update checks.
 - GitHub Releases update checks with an install-and-relaunch action when a newer version is available.
 
-The menu also includes native AppKit commands for the dashboard, server URL configuration, login, and quit. It is read-only with respect to account state, so it cannot accidentally pause or mutate a connected account.
+The panel is read-only with respect to account state, so it cannot accidentally pause or mutate a connected account.
 
 Dashboard passwords are stored per server in the user's macOS login Keychain,
 never in preferences or ordinary files. When the server-side session expires,
@@ -29,7 +29,22 @@ Requires macOS 13 or later and Xcode command-line tools:
 ./script/build_and_run.sh
 ```
 
-The default server is `http://127.0.0.1:2455`. Use the ellipsis menu at the bottom of the status menu to change it or log in.
+The default server is `http://127.0.0.1:2455`. Use **Settings → Config Server…** to change it or log in.
+
+To open the panel immediately for UI inspection, launch the built app with:
+
+```bash
+./script/build_and_run.sh --show-panel
+```
+
+This inspection mode activates the app and shows a Dock icon. Normal launches remain menu-bar-only.
+
+Run the logic and dropdown placement checks with:
+
+```bash
+swiftc StatusBarLogic.swift DropdownPlacement.swift CredentialStore.swift StatusBarLogicTests.swift -framework Security -o build/StatusBarLogicTests
+./build/StatusBarLogicTests
+```
 
 ## Publishing an update
 

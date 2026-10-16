@@ -10,7 +10,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -whole-module-optimization \
   -target arm64-apple-macosx13.0 \
   -framework Cocoa -framework SwiftUI -framework ServiceManagement -framework Security \
-  "$ROOT/StatusBarLogic.swift" "$ROOT/CredentialStore.swift" "$ROOT/CodexLBMenuBar.swift" \
+  "$ROOT/StatusBarLogic.swift" "$ROOT/CredentialStore.swift" "$ROOT/DropdownPlacement.swift" \
+  "$ROOT/PanelStyle.swift" "$ROOT/MenuPanel.swift" "$ROOT/CodexLBMenuBar.swift" \
   -o "$APP/Contents/MacOS/CodexLBMenuBar"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/ChatGPTLogo.svg" "$APP/Contents/Resources/ChatGPTLogo.svg"

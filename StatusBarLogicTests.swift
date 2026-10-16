@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 @main
 enum StatusBarLogicTests {
@@ -48,7 +49,34 @@ enum StatusBarLogicTests {
             automaticRetryAllowed: false
         ) == .requireLogin)
         assert(credentialAccount(for: "  https://example.test:8448/  ") == "https://example.test:8448")
+        testDropdownPlacement()
         print("StatusBarLogicTests passed")
+    }
+
+    private static func testDropdownPlacement() {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        let anchor = CGRect(x: 1000, y: 879, width: 50, height: 24)
+        var placement = DropdownPlacement()
+        placement.open(anchor: anchor, screen: screen)
+        let size = CGSize(width: 384, height: 700)
+        let initial = placement.frame(currentAnchor: anchor, screen: screen, size: size)
+        assert(initial.maxY == anchor.minY - 4)
+        assert(initial.midX == anchor.midX)
+        let movedAnchor = anchor.offsetBy(dx: -80, dy: 0)
+        // Refreshes may change the status title's width; an open panel stays put.
+        assert(placement.frame(currentAnchor: movedAnchor, screen: screen, size: size) == initial)
+        placement.close()
+        let reopened = placement.frame(currentAnchor: movedAnchor, screen: screen, size: size)
+        assert(reopened.midX == movedAnchor.midX)
+        for screen in [screen, CGRect(x: -1920, y: -200, width: 1920, height: 1080)] {
+            for x in [screen.minX, screen.maxX] {
+                let edgeAnchor = CGRect(x: x, y: screen.maxY, width: 40, height: 24)
+                let frame = placement.frame(currentAnchor: edgeAnchor, screen: screen, size: size)
+                assert(frame.minX >= screen.minX + 8)
+                assert(frame.maxX <= screen.maxX - 8)
+                assert(frame.minY >= screen.minY + 8)
+            }
+        }
     }
 
     private static func runKeychainPersistenceProbe(mode: String, service: String, serverURL: String) {

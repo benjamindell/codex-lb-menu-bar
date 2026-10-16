@@ -1,12 +1,13 @@
 import Cocoa
 import Combine
 import Foundation
+import OSLog
 import ServiceManagement
 import SwiftUI
 
 private let defaultBaseURL = "http://127.0.0.1:2455"
 
-private final class SettingsStore {
+final class SettingsStore {
     private let defaults = UserDefaults.standard
     private let baseURLKey = "codexLBBaseURL"
 
@@ -396,14 +397,13 @@ private extension JSONDecoder {
 }
 
 @MainActor
-private final class StatusViewModel: ObservableObject {
+final class StatusViewModel: ObservableObject {
     @Published var overview: DashboardOverview?
     @Published var errorMessage: String?
     @Published var isRefreshing = false
     @Published var lastRefreshedAt: Date?
     @Published var serverVersion: String?
-    @Published var showSettings = false
-    @Published var availableHeight: CGFloat = 520
+    @Published var availableHeight: CGFloat = 720
     @Published var measuredContentHeight: CGFloat?
 
     let settings: SettingsStore
@@ -422,36 +422,12 @@ private final class StatusViewModel: ObservableObject {
     var primaryAverage: Double? { average(overview?.accounts.filter { $0.status == "active" }.map { $0.usage?.primaryRemainingPercent } ?? []) }
     var secondaryAverage: Double? { average(overview?.accounts.filter { $0.status == "active" }.map { $0.usage?.secondaryRemainingPercent } ?? []) }
 
-    /// The menu item should be content-sized until the account list genuinely
-    /// needs scrolling. `availableHeight` is only the screen-derived ceiling.
-    var preferredMenuHeight: CGFloat {
-        guard let accounts = overview?.accounts, !accounts.isEmpty else {
-            return min(320, availableHeight)
-        }
-
-        if let measuredContentHeight, measuredContentHeight > 0 {
-            return min(measuredContentHeight, availableHeight)
-        }
-
-        // Keep the native menu content-sized for the common case instead of
-        // reserving a generic fixed-height viewport. A row with one quota has
-        // no quota heading; rows with multiple windows get a little more room
-        // for the labelled bars and their reset metadata.
-        let accountHeight = accounts.reduce(CGFloat.zero) { total, account in
-            let quotaCount = [
-                account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil,
-                account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil,
-                account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil,
-            ].filter { $0 }.count
-            let quotaRowHeight: CGFloat = quotaCount > 1 ? 45 : 25
-            let quotaSpacing = CGFloat(max(0, quotaCount - 1)) * 8
-            let cardHeight = 16 + 40 + 8 + CGFloat(quotaCount) * quotaRowHeight + quotaSpacing
-            return total + cardHeight
-        }
-        let separators = CGFloat(max(0, accounts.count - 1))
-        let desiredHeight = 10 + 52 + 14 + accountHeight + separators + 14
-        return min(desiredHeight, availableHeight)
+    // Header and footer stay visible while the cards scroll on smaller screens.
+    var cardViewportHeight: CGFloat {
+        min(measuredContentHeight ?? 240, max(0, availableHeight - MenuLayout.chromeHeight))
     }
+
+    var preferredPanelHeight: CGFloat { MenuLayout.chromeHeight + cardViewportHeight }
 
     func refresh() {
         guard !isRefreshing else { return }
@@ -541,361 +517,27 @@ private final class StatusViewModel: ObservableObject {
     func loginGuest(password: String?) async throws { _ = try await client.loginGuest(password: password); refresh() }
 }
 
-private struct MenuContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private enum MenuLayout {
-    static let width: CGFloat = 300
-    static let hoverInset: CGFloat = 7
-    static let rowPadding: CGFloat = 7
-    // Every visible content edge uses this guide; backgrounds extend outward
-    // by rowPadding, leaving hoverInset between them and the menu edge.
-    static let contentInset = hoverInset + rowPadding
-    static let trailingColumnWidth: CGFloat = 38
-}
-
-private struct ColorTokens {
-    static let blue = Color(red: 0.19, green: 0.49, blue: 0.92)
-    static let green = Color(red: 0.16, green: 0.72, blue: 0.43)
-    static let amber = Color(red: 0.92, green: 0.58, blue: 0.15)
-    static let red = Color(red: 0.88, green: 0.23, blue: 0.29)
-}
-
-private func quotaTint(for percent: Double?) -> Color {
-    guard let percent else { return .secondary }
-    switch quotaTone(for: percent) { case .healthy: return ColorTokens.green; case .watch: return ColorTokens.amber; case .critical: return ColorTokens.red }
-}
-
-private struct ColoredQuotaProgressStyle: ProgressViewStyle {
-    let tint: Color
-    let minimumFill: CGFloat
-
-    func makeBody(configuration: Configuration) -> some View {
-        GeometryReader { proxy in
-            let fraction = min(max(configuration.fractionCompleted ?? 0, 0), 1)
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Color.primary.opacity(0.10))
-                Capsule(style: .continuous)
-                    .fill(tint)
-                    .frame(width: fraction == 0 ? minimumFill : proxy.size.width * fraction)
-            }
-            .frame(height: 6)
-        }
-        .frame(height: 6)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct QuotaBar: View {
-    let value: Double?
-    var body: some View {
-        ProgressView(value: value.map { min(max($0, 0), 100) }, total: 100)
-            .progressViewStyle(ColoredQuotaProgressStyle(tint: quotaTint(for: value), minimumFill: value == nil ? 0 : 2))
-            .frame(height: 6)
-    }
-}
-
-private struct QuotaRow: View {
-    let title: String?
-    let value: Double?
-    let resetAt: Date?
-
-    init(title: String? = nil, value: Double?, resetAt: Date?) {
-        self.title = title
-        self.value = value
-        self.resetAt = resetAt
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            if let title {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-            }
-            QuotaBar(value: value)
-            HStack(spacing: 4) {
-                Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("\(roundedPercent(value)) left")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(value == nil ? .secondary : .primary)
-            }
-            .font(.caption2.weight(.medium))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct AccountCard: View {
-    let account: AccountSummary
-    let openAccount: () -> Void
-    @State private var isHovered = false
-
-    private var warmupText: String { account.limitWarmupEnabled == true ? "Warm-up on" : "Warm-up off" }
-    private var warmupIcon: String { account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash" }
-    private var warmupColor: Color { account.limitWarmupEnabled == true ? ColorTokens.blue : .secondary }
-    private var hasPrimary: Bool { account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil }
-    private var hasWeekly: Bool { account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil }
-    private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
-    private var quotaCount: Int { [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count }
-    private var showQuotaLabels: Bool { quotaCount > 1 }
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(account.email).font(.headline.weight(.semibold)).lineLimit(1)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(account.planType.capitalized).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 8)
-                    Image(systemName: warmupIcon)
-                        .font(.caption)
-                        .foregroundStyle(warmupColor)
-                    Text(warmupText)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                }
-            }
-            VStack(spacing: 8) {
-                if hasPrimary {
-                    QuotaRow(
-                        title: showQuotaLabels ? "5-hour" : nil,
-                        value: account.usage?.primaryRemainingPercent,
-                        resetAt: account.resetAtPrimary
-                    )
-                }
-                if hasWeekly {
-                    QuotaRow(
-                        title: showQuotaLabels ? "Weekly" : nil,
-                        value: account.usage?.secondaryRemainingPercent,
-                        resetAt: account.resetAtSecondary
-                    )
-                }
-                if hasMonthly {
-                    QuotaRow(
-                        title: showQuotaLabels ? "Monthly" : nil,
-                        value: account.usage?.monthlyRemainingPercent,
-                        resetAt: account.resetAtMonthly
-                    )
-                }
-            }
-        }
-        .padding(.vertical, 8)
-    }
-
-    var body: some View {
-        Button(action: openAccount) {
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, MenuLayout.rowPadding)
-                .background(isHovered ? Color.primary.opacity(0.08) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help("Open \(account.title) in Codex LB")
-    }
-}
-
-private struct MenuContentView: View {
-    @ObservedObject var model: StatusViewModel
-    let openAccount: (AccountSummary) -> Void
-
-    private var sortedAccounts: [AccountSummary] { (model.overview?.accounts ?? []).sorted { ($0.status == "active" ? 0 : 1, $0.title.lowercased()) < ($1.status == "active" ? 0 : 1, $1.title.lowercased()) } }
-
-    var body: some View {
-        ZStack {
-            // Keep the surface transparent so the native NSMenu window supplies
-            // its material, edge treatment, and shadow.
-            Color.clear.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    header
-                    if let _ = model.overview, !sortedAccounts.isEmpty {
-                        VStack(spacing: 0) {
-                            ForEach(Array(sortedAccounts.enumerated()), id: \.element.id) { index, account in
-                                AccountCard(account: account, openAccount: { openAccount(account) })
-                                if index < sortedAccounts.count - 1 {
-                                    Divider().padding(.horizontal, MenuLayout.rowPadding)
-                                }
-                            }
-                        }
-                    } else if let message = model.errorMessage {
-                        emptyState(title: message == "Dashboard login required" ? "Login required" : "Can’t reach Codex LB", detail: message)
-                    } else {
-                        emptyState(title: model.isRefreshing ? "Refreshing usage" : "No accounts yet", detail: model.isRefreshing ? "Checking your connected apps…" : "Import an account in Codex LB, then refresh.")
-                    }
-                }
-                .padding(.horizontal, MenuLayout.hoverInset)
-                .padding(.top, 10)
-                .padding(.bottom, 14)
-                .background(GeometryReader { proxy in
-                    Color.clear.preference(key: MenuContentHeightKey.self, value: proxy.size.height)
-                })
-            }
-        }
-        // Keep the native menu item tight for the empty/error state. Once there
-        // are enough account cards to exceed the screen-derived ceiling, the
-        // inner ScrollView becomes the bounded viewport.
-        .frame(width: MenuLayout.width, height: model.preferredMenuHeight)
-        .preferredColorScheme(nil)
-        .onPreferenceChange(MenuContentHeightKey.self) { height in
-            guard height > 0 else { return }
-            model.measuredContentHeight = height
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Codex LB").font(.headline.weight(.semibold))
-                    Text(model.lastRefreshedAt.map { "Updated \(relativeUpdated($0))" } ?? "Auto-refreshes every minute")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 2) {
-                    let average = model.secondaryAverage ?? model.primaryAverage
-                    Text(roundedPercent(average))
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(quotaTint(for: average))
-                    Text("\(model.activeCount)/\(model.totalCount) active")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Divider()
-        }
-        .padding(.horizontal, MenuLayout.rowPadding)
-    }
-
-    private func emptyState(title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) { Image(systemName: "waveform.path.ecg").font(.title2).foregroundStyle(ColorTokens.blue); Text(title).font(.headline); Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, MenuLayout.rowPadding).padding(.vertical, 18).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-}
-
-private func relativeUpdated(_ date: Date) -> String {
-    let seconds = max(0, Int(Date().timeIntervalSince(date)))
-    if seconds < 60 { return "just now" }
-    if seconds < 3_600 { return "\(seconds / 60)m ago" }
-    return "\(seconds / 3_600)h ago"
-}
-
-private final class MenuActionItemView: NSView {
-    private let titleField: NSTextField
-    private let trailingField: NSTextField
-    private let activateAction: () -> Void
-    private(set) var isHighlighted = false
-    private var isActionEnabled = true
-
-    override var intrinsicContentSize: NSSize { NSSize(width: MenuLayout.width, height: 24) }
-
-    init(title: String, trailing: String = "", action: @escaping () -> Void = {}) {
-        titleField = NSTextField(labelWithString: title)
-        trailingField = NSTextField(labelWithString: trailing)
-        activateAction = action
-        super.init(frame: NSRect(x: 0, y: 0, width: MenuLayout.width, height: 24))
-        titleField.font = .menuFont(ofSize: 0)
-        trailingField.font = .menuFont(ofSize: 0)
-        trailingField.alignment = .right
-        titleField.translatesAutoresizingMaskIntoConstraints = false
-        trailingField.translatesAutoresizingMaskIntoConstraints = false
-        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        trailingField.setContentCompressionResistancePriority(.required, for: .horizontal)
-        addSubview(titleField)
-        addSubview(trailingField)
-        NSLayoutConstraint.activate([
-            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MenuLayout.contentInset),
-            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingField.leadingAnchor, constant: -8),
-            trailingField.widthAnchor.constraint(equalToConstant: MenuLayout.trailingColumnWidth),
-            trailingField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MenuLayout.contentInset),
-            trailingField.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        updateColors()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func setTitle(_ value: String) { titleField.stringValue = value }
-
-    func setTrailing(_ value: String) { trailingField.stringValue = value }
-
-    func setEnabled(_ enabled: Bool) {
-        isActionEnabled = enabled
-        alphaValue = enabled ? 1 : 0.55
-    }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        guard isActionEnabled else { return }
-        setHighlighted(true)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard isActionEnabled else { return }
-        let location = convert(event.locationInWindow, from: nil)
-        setHighlighted(false)
-        guard bounds.contains(location) else { return }
-        activateAction()
-    }
-
-    func setHighlighted(_ highlighted: Bool) {
-        isHighlighted = highlighted
-        updateColors()
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard isHighlighted else { return }
-        NSColor.systemBlue.setFill()
-        let highlightRect = bounds.insetBy(dx: MenuLayout.hoverInset, dy: 0)
-        NSBezierPath(roundedRect: highlightRect, xRadius: 7, yRadius: 7).fill()
-    }
-
-    private func updateColors() {
-        let color = isHighlighted ? NSColor.selectedMenuItemTextColor : NSColor.controlTextColor
-        titleField.textColor = color
-        trailingField.textColor = isHighlighted ? NSColor.selectedMenuItemTextColor : NSColor.secondaryLabelColor
-    }
-}
-
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = SettingsStore()
     private let updater = AppUpdater()
     private lazy var viewModel = StatusViewModel(settings: settings)
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let menu = NSMenu()
-    private let menuItem = NSMenuItem()
-    private var launchAtLoginItem: NSMenuItem?
-    private var launchAtLoginView: MenuActionItemView?
-    private var updateItem: NSMenuItem?
-    private var updateView: MenuActionItemView?
+    private let panel = MenuBarPanel()
+    private let actions = PanelActions()
+    private var placement = DropdownPlacement()
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
     private var latestUpdate: AppUpdate?
     private var updateCheckTask: Task<Void, Never>?
     private var hostingView: NSHostingView<MenuContentView>?
     private var timer: Timer?
     private var updateTimer: Timer?
     private var modelObservation: AnyCancellable?
-    private var heightObservation: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(CommandLine.arguments.contains("--show-panel") ? .regular : .accessory)
+        Logger(subsystem: "com.codexlb.status", category: "MenuPanel").info("Application launched")
         if let button = statusItem.button {
             button.image = menuBarIcon()
             button.imagePosition = .imageLeading
@@ -904,26 +546,38 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             button.toolTip = "Codex LB Menu Bar"
         }
 
-        // Assigning an NSMenu to the status item gives us the same native menu
-        // tracking, anchoring, keyboard handling, and dismissal behavior as the
-        // rest of the macOS menu bar. The single custom item is only the content
-        // surface; AppKit still owns the menu window itself.
-        menu.delegate = self
-        menu.autoenablesItems = false
-        menuItem.isEnabled = true
-        menuItem.view = makeHostingView(height: viewModel.preferredMenuHeight)
-        menu.addItem(menuItem)
-        menu.addItem(.separator())
-        addNativeActionItems()
-        statusItem.menu = menu
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(togglePanel)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        let content = MenuContentView(
+            model: viewModel, actions: actions,
+            openAccount: { [weak self] in self?.openAccount($0) },
+            openDashboard: { [weak self] in self?.openDashboard() },
+            configureServer: { [weak self] in self?.configureServer() },
+            toggleLaunchAtLogin: { [weak self] in self?.toggleLaunchAtLogin(nil) },
+            checkForUpdates: { [weak self] in self?.checkForUpdatesFromMenu(nil) },
+            quit: { [weak self] in self?.quit() }
+        )
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.sizingOptions = []
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.layer?.isOpaque = false
+        hostingView.layer?.cornerRadius = PanelMetrics.panelCornerRadius
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
+        panel.contentView = hostingView
+        self.hostingView = hostingView
+        resizeHostingView()
+        updateLaunchAtLoginItem()
         checkForUpdates(showErrors: false)
 
-        modelObservation = viewModel.$overview.sink { [weak self] _ in
-            self?.updateStatusButton()
-            self?.resizeHostingView()
-        }
-        heightObservation = viewModel.$measuredContentHeight.sink { [weak self] _ in
-            self?.resizeHostingView()
+        modelObservation = viewModel.objectWillChange.sink { [weak self] _ in
+            // Published values and SwiftUI measurement settle before window sizing.
+            Task { @MainActor in
+                self?.updateStatusButton()
+                self?.resizeHostingView()
+            }
         }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.viewModel.refresh() }
@@ -932,6 +586,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             Task { @MainActor in self?.checkForUpdates(showErrors: false) }
         }
         viewModel.refresh()
+        if CommandLine.arguments.contains("--show-panel") {
+            DispatchQueue.main.async { [weak self] in
+                NSApp.activate(ignoringOtherApps: true)
+                self?.togglePanel()
+            }
+        }
     }
 
     private func menuBarIcon() -> NSImage {
@@ -948,42 +608,72 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         return NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Codex LB")!
     }
 
-    private func makeHostingView(height: CGFloat) -> NSHostingView<MenuContentView> {
-        let rootView = MenuContentView(
-            model: viewModel,
-            openAccount: { [weak self] account in self?.openAccount(account) }
-        )
-        let view = NSHostingView(rootView: rootView)
-        view.frame = NSRect(x: 0, y: 0, width: MenuLayout.width, height: height)
-        view.autoresizingMask = [.width, .height]
-        hostingView = view
-        return view
-    }
-
-    private func menuHeight(for screen: NSScreen?) -> CGFloat {
-        let visibleHeight = screen?.visibleFrame.height ?? 720
-        // Leave a little room for the menu bar and the native menu's own margins.
-        return min(720, max(320, visibleHeight - 72))
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        guard let button = statusItem.button else { return }
-        let screen = button.window?.screen ?? NSScreen.main
-        let height = menuHeight(for: screen)
-        viewModel.availableHeight = height
-        resizeHostingView()
-        updateStatusButton()
+    @objc private func togglePanel() {
+        if panel.isVisible { closeMenu(); return }
+        guard let button = statusItem.button, let window = button.window else { return }
+        let screen = window.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        viewModel.availableHeight = max(MenuLayout.chromeHeight, visible.height - 12)
+        placement.open(anchor: window.convertToScreen(button.convert(button.bounds, to: nil)), screen: visible)
         updateLaunchAtLoginItem()
+        resizeHostingView()
+        panel.makeKeyAndOrderFront(nil)
+        panel.invalidateShadow()
+        Logger(subsystem: "com.codexlb.status", category: "MenuPanel")
+            .info("Dropdown visible: \(self.panel.isVisible), frame: \(NSStringFromRect(self.panel.frame), privacy: .public)")
+        startDismissalMonitors()
         viewModel.refresh()
     }
 
     private func resizeHostingView() {
-        hostingView?.setFrameSize(NSSize(width: MenuLayout.width, height: viewModel.preferredMenuHeight))
+        guard let button = statusItem.button, let window = button.window else { return }
+        let size = NSSize(width: MenuLayout.width, height: viewModel.preferredPanelHeight)
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let frame = placement.frame(currentAnchor: anchor, screen: visible, size: size)
+        if panel.frame != frame {
+            panel.setFrame(frame, display: panel.isVisible)
+            panel.invalidateShadow()
+        }
     }
 
-    func menuDidClose(_ menu: NSMenu) {
-        // NSMenu owns the close animation and state. This callback is intentionally
-        // side-effect free so reopening always starts from AppKit's normal state.
+    private func startDismissalMonitors() {
+        stopDismissalMonitors()
+        let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self] _ in
+            Task { @MainActor in self?.closeMenu() }
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents.union(.keyDown)) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown {
+                // Let an open Settings menu handle Escape before closing the panel.
+                if event.keyCode == 53, event.window === self.panel {
+                    self.closeMenu()
+                    return nil
+                }
+            } else if !self.belongsToPanel(event.window),
+                      event.window !== self.statusItem.button?.window,
+                      event.window?.level != .popUpMenu {
+                self.closeMenu()
+            }
+            return event
+        }
+    }
+
+    private func belongsToPanel(_ window: NSWindow?) -> Bool {
+        var current = window
+        while let candidate = current {
+            if candidate === panel { return true }
+            current = candidate.parent
+        }
+        return false
+    }
+
+    private func stopDismissalMonitors() {
+        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+        globalMouseMonitor = nil
+        localMouseMonitor = nil
     }
 
     private func updateStatusButton() {
@@ -991,56 +681,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         button.title = menuBarTitle(primary: viewModel.primaryAverage, secondary: viewModel.secondaryAverage)
     }
 
-    private func addNativeActionItems() {
-        let dashboardItem = NSMenuItem(title: "Open Dashboard", action: #selector(openDashboardFromMenu(_:)), keyEquivalent: "")
-        dashboardItem.target = self
-        dashboardItem.view = MenuActionItemView(title: "Open Dashboard", action: { [weak self] in self?.openDashboard() })
-        menu.addItem(dashboardItem)
-
-        let serverItem = NSMenuItem(title: "Config Server…", action: #selector(configureServerFromMenu(_:)), keyEquivalent: "")
-        serverItem.target = self
-        serverItem.view = MenuActionItemView(title: "Config Server…", action: { [weak self] in self?.configureServer() })
-        menu.addItem(serverItem)
-
-        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
-        launchItem.target = self
-        let launchView = MenuActionItemView(title: "Launch at Login", action: { [weak self] in self?.toggleLaunchAtLogin(nil) })
-        launchItem.view = launchView
-        launchAtLoginView = launchView
-        launchAtLoginItem = launchItem
-        menu.addItem(launchItem)
-        updateLaunchAtLoginItem()
-
-        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesFromMenu(_:)), keyEquivalent: "")
-        updateItem.target = self
-        let updateView = MenuActionItemView(title: "Check for Updates…", action: { [weak self] in self?.checkForUpdatesFromMenu(nil) })
-        updateItem.view = updateView
-        self.updateItem = updateItem
-        self.updateView = updateView
-        menu.addItem(updateItem)
-
-        menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit Codex LB Menu Bar", action: #selector(quitFromMenu(_:)), keyEquivalent: "q")
-        quitItem.target = self
-        quitItem.view = MenuActionItemView(title: "Quit Codex LB Menu Bar", trailing: "⌘Q", action: { [weak self] in self?.quit() })
-        menu.addItem(quitItem)
-    }
-
     private func updateLaunchAtLoginItem() {
-        let enabled = SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval
-        launchAtLoginItem?.state = .off
-        guard launchAtLoginItem != nil else { return }
-        launchAtLoginView?.setTrailing(enabled ? "✓" : "")
-    }
-
-    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
-        for menuItem in menu.items {
-            (menuItem.view as? MenuActionItemView)?.setHighlighted(menuItem === item)
-        }
+        actions.launchAtLogin = SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval
     }
 
     private func closeMenu() {
-        menu.cancelTracking()
+        panel.orderOut(nil)
+        placement.close()
+        stopDismissalMonitors()
     }
 
     private func openDashboard() { closeMenu(); NSWorkspace.shared.open(settings.baseURL) }
@@ -1054,8 +702,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         NSWorkspace.shared.open(components?.url ?? settings.baseURL)
     }
 
-    @objc private func openDashboardFromMenu(_ sender: Any?) { openDashboard() }
-    @objc private func configureServerFromMenu(_ sender: Any?) { configureServer() }
     @objc private func checkForUpdatesFromMenu(_ sender: Any?) {
         if latestUpdate != nil {
             installUpdate()
@@ -1066,22 +712,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     private func checkForUpdates(showErrors: Bool) {
         guard updateCheckTask == nil else { return }
-        updateItem?.isEnabled = false
-        updateView?.setEnabled(false)
-        updateView?.setTitle("Checking for Updates…")
+        actions.updateBusy = true
+        actions.updateTitle = "Checking for Updates…"
         updateCheckTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let update = try await updater.checkForUpdate()
                 latestUpdate = update
-                updateView?.setTitle(update.map { "Install Update \($0.version)" } ?? "Check for Updates…")
+                actions.updateTitle = update.map { "Install Update \($0.version)" } ?? "Check for Updates…"
             } catch {
                 latestUpdate = nil
-                updateView?.setTitle("Check for Updates…")
+                actions.updateTitle = "Check for Updates…"
                 if showErrors { showError(error.localizedDescription) }
             }
-            updateItem?.isEnabled = true
-            updateView?.setEnabled(true)
+            actions.updateBusy = false
             updateCheckTask = nil
         }
     }
@@ -1089,18 +733,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private func installUpdate() {
         guard let update = latestUpdate else { return }
         closeMenu()
-        updateItem?.isEnabled = false
-        updateView?.setEnabled(false)
-        updateView?.setTitle("Installing Update…")
+        actions.updateBusy = true
+        actions.updateTitle = "Installing Update…"
         updateCheckTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await updater.install(update)
                 NSApp.terminate(nil)
             } catch {
-                updateView?.setTitle("Install Update \(update.version)")
-                updateItem?.isEnabled = true
-                updateView?.setEnabled(true)
+                actions.updateTitle = "Install Update \(update.version)"
+                actions.updateBusy = false
                 showError(error.localizedDescription)
                 updateCheckTask = nil
             }
@@ -1125,7 +767,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             showError("Couldn’t update launch at login: \(error.localizedDescription)")
         }
     }
-    @objc private func quitFromMenu(_ sender: Any?) { quit() }
 
     private func configureServer() {
         closeMenu()
@@ -1206,11 +847,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         updateTimer?.invalidate()
         updateCheckTask?.cancel()
         modelObservation?.cancel()
-        heightObservation?.cancel()
+        stopDismissalMonitors()
     }
 }
 
 @main
 private enum CodexLBMenuBarMain {
-    @MainActor static func main() { let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate; app.run() }
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
+    }
 }
