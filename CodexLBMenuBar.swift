@@ -415,7 +415,6 @@ final class StatusViewModel: ObservableObject {
     @Published var availableHeight: CGFloat = 720
     @Published var measuredContentHeight: CGFloat?
     @Published var resetPopoverAccountID: String?
-    var resetConfirmationVisible = false
     private var resetStores: [String: ResetCreditStore] = [:]
 
     let settings: SettingsStore
@@ -676,7 +675,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self?.closeMenu() }
         }
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents.union(.keyDown)) { [weak self] event in
-            guard let self, !self.viewModel.resetConfirmationVisible else { return event }
+            guard let self else { return event }
             if event.type == .keyDown {
                 // Let an open Settings menu handle Escape before closing the panel.
                 if event.keyCode == 53, event.window === self.panel {
@@ -718,7 +717,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func closeMenu() {
-        guard !viewModel.resetConfirmationVisible else { return }
         viewModel.resetPopoverAccountID = nil
         panel.orderOut(nil)
         placement.close()

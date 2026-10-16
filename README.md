@@ -9,7 +9,7 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - 5-hour, weekly, and monthly progress bars with colour-coded remaining capacity.
 - Relative reset times such as `Reset in 2d 4h` rather than calendar dates.
 - Available reset counts per account, with a Sonos-style dropdown showing each reset and its expiry.
-- A full-width **Use next reset** action, which asks for confirmation before spending the soonest-expiring reset.
+- A full-width **Use next reset** action, which changes to a red confirmation prompt on the first click and spends the soonest-expiring reset on the second click. After success, it shows a disabled green **Reset applied** state; close and reopen the dropdown to use another reset.
 - Loading and applying indicators, plus safe retries that reuse the same request ID after a timeout or app restart.
 - The latest warm-up result when provided by the server.
 - Automatic refresh every 60 seconds and an immediate refresh button.

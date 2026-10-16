@@ -41,8 +41,11 @@ struct ResetCreditButton: View {
             if store.snapshot != nil { Task { await store.load() } }
         }
         .popover(isPresented: isPresented, arrowEdge: .bottom) {
-            ResetCreditPicker(account: account, store: store, model: model) { isPresented.wrappedValue = false }
-                .task { await store.load() }
+            ResetCreditPicker(account: account, store: store) { isPresented.wrappedValue = false }
+                .task {
+                    store.beginPresentation()
+                    await store.load()
+                }
         }
     }
 }
@@ -63,7 +66,6 @@ private struct ResetCountButtonStyle: ButtonStyle {
 private struct ResetCreditPicker: View {
     let account: AccountSummary
     @ObservedObject var store: ResetCreditStore
-    @ObservedObject var model: StatusViewModel
     let close: () -> Void
 
     private var contentHeight: CGFloat {
@@ -76,7 +78,6 @@ private struct ResetCreditPicker: View {
             }
         }
     }
-    @State private var showingConfirmation = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -120,40 +121,38 @@ private struct ResetCreditPicker: View {
                     .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10).background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             }
-            if let message = store.successMessage {
-                Label(message, systemImage: "checkmark.circle")
-                    .font(.system(size: 11)).foregroundStyle(.green).frame(maxWidth: .infinity, alignment: .leading)
-            }
             Divider()
-            Button {
-                if store.retryCredit != nil { Task { await store.retry() } }
-                else {
-                    store.requestConfirmation()
-                    showingConfirmation = store.confirmation != nil
+            if store.hasAppliedReset {
+                Button {} label: {
+                    Label("Reset applied", systemImage: "checkmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.green)
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    if store.isApplying { ProgressView().controlSize(.small) }
-                    else { Image(systemName: "arrow.counterclockwise") }
-                    Text(store.isApplying ? "Applying reset…" : store.retryCredit != nil ? "Retry same reset" : "Use next reset")
+                .buttonStyle(.plain)
+                .disabled(true)
+            } else {
+                Button {
+                    if store.retryCredit != nil { Task { await store.retry() } }
+                    else if store.confirmation != nil { Task { await store.confirm() } }
+                    else { store.requestConfirmation() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if store.isApplying { ProgressView().controlSize(.small) }
+                        else { Image(systemName: store.confirmation != nil ? "exclamationmark.triangle" : "arrow.counterclockwise") }
+                        Text(store.isApplying ? "Applying reset…" : store.retryCredit != nil ? "Retry same reset" : store.confirmation != nil ? "Confirm reset — can’t undo" : "Use next reset")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(store.confirmation != nil ? Color.red : Color.secondary)
+                    .frame(maxWidth: .infinity).frame(height: 34)
                 }
-                .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).frame(height: 34)
+                .buttonStyle(HoverButtonStyle(isCard: true, isLoading: store.isApplying))
+                .disabled(store.isApplying || store.isLoading || (store.credits.isEmpty && store.retryCredit == nil) || account.status != "active")
             }
-            .buttonStyle(HoverButtonStyle(isCard: true))
-            .disabled(store.isApplying || store.isLoading || (store.credits.isEmpty && store.retryCredit == nil) || account.status != "active")
         }
         .padding(14).frame(width: 320).tint(.blue)
-        .alert("Use a reset?", isPresented: $showingConfirmation, presenting: store.confirmation) { _ in
-            Button("Cancel", role: .cancel) { store.cancelConfirmation() }
-            Button("Use reset") {
-                // The task belongs to the store, not the popover's read task.
-                Task { await store.confirm() }
-            }
-        } message: { credit in
-            Text("Apply a rate-limit reset to \(account.email)?\n\nThis spends the next available reset to expire (currently \(credit.expiresAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "no expiry provided")). This cannot be undone.")
-        }
-        .onChange(of: showingConfirmation) { model.resetConfirmationVisible = $0 }
-        .onDisappear { store.cancelConfirmation(); model.resetConfirmationVisible = false }
+        .onDisappear { store.cancelConfirmation() }
     }
 }
 
@@ -174,6 +173,6 @@ private struct ResetCreditRow: View {
             }.lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             if isApplying { ProgressView().controlSize(.small).frame(width: 16, height: 16) }
         }
-        .padding(8).frame(height: 52)
+        .padding(.vertical, 8).frame(height: 52)
     }
 }

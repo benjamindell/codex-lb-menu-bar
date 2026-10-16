@@ -55,11 +55,16 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         await store.confirm()
         expect(api.requests.isEmpty, "Cancel prevents redemption")
 
+        store.requestConfirmation()
+        store.beginPresentation()
+        await store.confirm()
+        expect(store.confirmation == nil && api.requests.isEmpty, "Reopening discards an unconfirmed first click")
+
         // An ambiguous timeout keeps the exact operation, including after restart.
         store.requestConfirmation()
         api.failConsume = true
         await store.confirm()
-        expect(store.errorMessage != nil && store.retryCredit == first, "Retain uncertain redemption for safe retry")
+        expect(!store.hasAppliedReset && store.errorMessage != nil && store.retryCredit == first, "Retain uncertain redemption for safe retry")
         expect(api.requests.count == 1 && api.requests[0].account == "account-A", "One account-specific consume")
         let originalID = api.requests[0].id
         expect(UUID(uuidString: originalID) != nil, "Use a unique durable request ID")
@@ -85,6 +90,16 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         expect(api.requests[1].id == originalID, "Retry must reuse the durable ID")
         expect(restored.retryCredit == nil && !restored.isApplying && appliedCount == 1, "Success clears pending and refreshes usage once")
         expect(restored.credits == [second], "Reload remaining credits after applying")
+        expect(restored.hasAppliedReset, "Success latches the disabled button for this presentation")
+        await restored.load()
+        restored.requestConfirmation()
+        await restored.confirm()
+        expect(restored.hasAppliedReset && restored.confirmation == nil && api.requests.count == 2,
+               "Refreshing or clicking again cannot redeem another reset in the same presentation")
+        restored.beginPresentation()
+        restored.requestConfirmation()
+        expect(!restored.hasAppliedReset && restored.confirmation == second, "Reopening allows the next reset with fresh confirmation")
+        restored.cancelConfirmation()
         let relaunched = ResetCreditStore(accountID: "account-A", server: "https://test", api: api, defaults: defaults)
         expect(relaunched.retryCredit == nil, "Success clears persisted operation")
         api.snapshot = nil

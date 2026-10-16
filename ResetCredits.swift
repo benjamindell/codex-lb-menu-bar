@@ -61,7 +61,7 @@ final class ResetCreditStore: ObservableObject {
     @Published private(set) var isApplying = false
     @Published private(set) var confirmation: ResetCredit?
     @Published private(set) var errorMessage: String?
-    @Published private(set) var successMessage: String?
+    @Published private(set) var hasAppliedReset = false
     @Published private var pending: PendingReset?
 
     let accountID: String
@@ -83,7 +83,12 @@ final class ResetCreditStore: ObservableObject {
     var credits: [ResetCredit] { snapshot?.availableCredits() ?? [] }
     var retryCredit: ResetCredit? { pending?.credit }
     var applyingCreditID: String? { isApplying ? pending?.credit.id : nil }
-    var isBlocked: Bool { isLoading || isApplying || confirmation != nil || pending != nil }
+    var isBlocked: Bool { isLoading || isApplying || hasAppliedReset || confirmation != nil || pending != nil }
+
+    func beginPresentation() {
+        hasAppliedReset = false
+        confirmation = nil
+    }
 
     func load() async {
         guard !isLoading, !isApplying else { return }
@@ -126,13 +131,12 @@ final class ResetCreditStore: ObservableObject {
         guard let operation = pending, !isApplying else { return }
         isApplying = true
         errorMessage = nil
-        successMessage = nil
         do {
             _ = try await api.consumeResetCredit(accountID: accountID, requestID: operation.requestID)
             pending = nil
             defaults.removeObject(forKey: pendingKey)
             snapshot = nil
-            successMessage = "Reset applied. Refreshing usage…"
+            hasAppliedReset = true
             didApply()
         } catch {
             errorMessage = "Couldn’t confirm the reset. Retry safely to check the same reset. \(error.localizedDescription)"
@@ -140,7 +144,6 @@ final class ResetCreditStore: ObservableObject {
         isApplying = false
         if pending == nil {
             await load()
-            successMessage = "Reset applied."
         }
     }
 
