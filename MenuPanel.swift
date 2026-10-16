@@ -51,15 +51,16 @@ private struct QuotaRow: View {
     let title: String
     let value: Double?
     let resetAt: Date?
+    let showWindowTitle: Bool
     let openAccount: () -> Void
-    var resetButton: AnyView? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: openAccount) {
                 VStack(spacing: 6) {
                     HStack {
-                        Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        Text((showWindowTitle ? "\(title) · " : "") + relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
+                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer()
                         Text("\(roundedPercent(value)) left")
                             .font(.system(size: 11, weight: .medium)).monospacedDigit()
@@ -68,16 +69,8 @@ private struct QuotaRow: View {
                 }
                 .contentShape(Rectangle())
             }.buttonStyle(.plain)
-            HStack(spacing: 8) {
-                Button(action: openAccount) {
-                    Text(relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
-                        .foregroundStyle(.secondary).lineLimit(1)
-                }.buttonStyle(.plain)
-                Spacer(minLength: 0)
-                if let resetButton { resetButton }
-            }
-            .font(.system(size: 10))
         }
+        .help("\(title) usage")
     }
 }
 
@@ -91,47 +84,46 @@ private struct AccountCard: View {
     private var hasPrimary: Bool { account.windowMinutesPrimary != nil || account.usage?.primaryRemainingPercent != nil }
     private var hasWeekly: Bool { account.windowMinutesSecondary != nil || account.usage?.secondaryRemainingPercent != nil }
     private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
-    private var resetButton: AnyView {
-        AnyView(ResetCreditButton(account: account, store: model.resetStore(for: account), model: model))
+    private var hasMultipleWindows: Bool {
+        [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count > 1
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button(action: openAccount) {
-                HStack(spacing: 11) {
-                    Image(systemName: "person.crop.circle")
-                        .font(.system(size: 17))
-                        .foregroundStyle(account.status == "active" ? Color.blue : Color.secondary)
-                        .frame(width: 34, height: 34)
-                        .background(account.status == "active" ? .blue.opacity(0.10) : .primary.opacity(0.04),
-                                    in: RoundedRectangle(cornerRadius: 10))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(account.email).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Text(account.planType.capitalized + " · " + account.status.replacingOccurrences(of: "_", with: " ").capitalized)
-                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                Button(action: openAccount) {
+                    HStack(spacing: 11) {
+                        Image(systemName: "person.crop.circle")
+                            .font(.system(size: 17))
+                            .foregroundStyle(account.status == "active" ? Color.blue : Color.secondary)
+                            .frame(width: 34, height: 34)
+                            .background(account.status == "active" ? .blue.opacity(0.10) : .primary.opacity(0.04),
+                                        in: RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(account.email).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(account.planType.capitalized + " · " + account.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(hovered ? Color.blue : Color.secondary)
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help("Open \(account.title) in Codex LB")
+                AccountActionsMenu(account: account, store: model.resetStore(for: account), model: model,
+                                   openAccount: openAccount)
             }
-            .buttonStyle(.plain)
-            .help("Open \(account.title) in Codex LB")
             if hasPrimary {
                 QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
-                         openAccount: openAccount, resetButton: !hasWeekly && !hasMonthly ? resetButton : nil)
+                         showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if hasWeekly {
                 QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary,
-                         openAccount: openAccount, resetButton: !hasMonthly ? resetButton : nil)
+                         showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if hasMonthly {
                 QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
-                         openAccount: openAccount, resetButton: resetButton)
-            }
-            if !hasPrimary && !hasWeekly && !hasMonthly {
-                HStack { Spacer(); resetButton }
+                         showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if let warmup = account.limitWarmup {
                 Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")

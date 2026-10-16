@@ -1,9 +1,10 @@
 import SwiftUI
 
-struct ResetCreditButton: View {
+struct AccountActionsMenu: View {
     let account: AccountSummary
     @ObservedObject var store: ResetCreditStore
     @ObservedObject var model: StatusViewModel
+    let openAccount: () -> Void
 
     private var isPresented: Binding<Bool> {
         Binding(get: { model.resetPopoverAccountID == account.id },
@@ -13,30 +14,34 @@ struct ResetCreditButton: View {
         if store.isApplying { return "Applying reset…" }
         if store.retryCredit != nil { return "Check reset" }
         let count = store.snapshot?.availableCredits().count ?? account.availableResetCredits
-        return count.map { "\($0) \($0 == 1 ? "reset" : "resets")" } ?? "Resets"
+        return count.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "Manage resets…"
     }
 
     var body: some View {
-        Button { isPresented.wrappedValue.toggle() } label: {
-            HStack(spacing: 4) {
+        Menu {
+            Button { isPresented.wrappedValue = true } label: {
+                Label(countText, systemImage: "arrow.counterclockwise")
+            }
+            Button(action: openAccount) {
+                Label("Open dashboard", systemImage: "arrow.up.right.square")
+            }
+        } label: {
+            Group {
                 if store.isApplying || store.isLoading {
                     ProgressView().controlSize(.mini).frame(width: 10, height: 10)
                 } else {
-                    Image(systemName: "arrow.counterclockwise")
+                    Image(systemName: "ellipsis")
                 }
-                Text(countText)
             }
-            .font(.system(size: 10, weight: .medium))
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .font(.system(size: 14, weight: .medium))
+            .frame(width: 24, height: 30)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(ResetCountButtonStyle())
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
-        // Align the text with the quota values; let the hover fill extend beyond it.
-        .padding(.trailing, -6)
-        .help("View available resets for \(account.email)")
-        .accessibilityLabel("\(countText) for \(account.email)")
-        .accessibilityValue(isPresented.wrappedValue ? "Expanded" : "Collapsed")
+        .help("Account options for \(account.email)")
+        .accessibilityLabel("Account options for \(account.email)")
         .onChange(of: account.availableResetCredits) { _ in
             if store.snapshot != nil { Task { await store.load() } }
         }
@@ -46,19 +51,6 @@ struct ResetCreditButton: View {
                     store.beginPresentation()
                     await store.load()
                 }
-        }
-    }
-}
-
-private struct ResetCountButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { Surface(configuration: configuration) }
-    private struct Surface: View {
-        let configuration: Configuration
-        @State private var hovered = false
-        var body: some View {
-            configuration.label.foregroundStyle(.secondary)
-                .background(.primary.opacity(hovered || configuration.isPressed ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 6))
-                .onHover { hovered = $0 }
         }
     }
 }
