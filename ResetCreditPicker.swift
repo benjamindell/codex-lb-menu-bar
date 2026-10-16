@@ -32,6 +32,8 @@ struct ResetCreditButton: View {
         }
         .buttonStyle(ResetCountButtonStyle())
         .fixedSize()
+        // Align the text with the quota values; let the hover fill extend beyond it.
+        .padding(.trailing, -6)
         .help("View available resets for \(account.email)")
         .accessibilityLabel("\(countText) for \(account.email)")
         .accessibilityValue(isPresented.wrappedValue ? "Expanded" : "Collapsed")
@@ -64,7 +66,16 @@ private struct ResetCreditPicker: View {
     @ObservedObject var model: StatusViewModel
     let close: () -> Void
 
-    private var contentHeight: CGFloat { max(72, min(CGFloat(store.credits.count) * 56 - 4, 276)) }
+    private var contentHeight: CGFloat {
+        store.credits.isEmpty ? 72 : min(CGFloat(store.credits.count) * 56 - 4, 276)
+    }
+    private var creditRows: some View {
+        VStack(spacing: 4) {
+            ForEach(store.credits) { credit in
+                ResetCreditRow(credit: credit, isApplying: store.applyingCreditID == credit.id)
+            }
+        }
+    }
     @State private var showingConfirmation = false
 
     var body: some View {
@@ -94,12 +105,10 @@ private struct ResetCreditPicker: View {
                             .font(.system(size: 12)).multilineTextAlignment(.center)
                     }.foregroundStyle(.secondary).padding(.vertical, 16)
                 } else {
-                    ScrollView {
-                        LazyVStack(spacing: 4) {
-                            ForEach(store.credits) { credit in
-                                ResetCreditRow(credit: credit, isApplying: store.applyingCreditID == credit.id)
-                            }
-                        }
+                    if store.credits.count > 5 {
+                        ScrollView { creditRows }
+                    } else {
+                        creditRows
                     }
                 }
             }
@@ -116,26 +125,22 @@ private struct ResetCreditPicker: View {
                     .font(.system(size: 11)).foregroundStyle(.green).frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
-            VStack(spacing: 8) {
-                Button {
-                    if store.retryCredit != nil { Task { await store.retry() } }
-                    else {
-                        store.requestConfirmation()
-                        showingConfirmation = store.confirmation != nil
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if store.isApplying { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "arrow.counterclockwise") }
-                        Text(store.isApplying ? "Applying reset…" : store.retryCredit != nil ? "Retry same reset" : "Use next reset")
-                    }
-                    .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).frame(height: 34)
+            Button {
+                if store.retryCredit != nil { Task { await store.retry() } }
+                else {
+                    store.requestConfirmation()
+                    showingConfirmation = store.confirmation != nil
                 }
-                .buttonStyle(HoverButtonStyle(isCard: true))
-                .disabled(store.isApplying || store.isLoading || (store.credits.isEmpty && store.retryCredit == nil) || account.status != "active")
-                Text(store.isApplying ? "Applying your reset…" : store.retryCredit != nil ? "Retries check the same reset without spending another." : "Uses the reset that expires first.")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } label: {
+                HStack(spacing: 6) {
+                    if store.isApplying { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "arrow.counterclockwise") }
+                    Text(store.isApplying ? "Applying reset…" : store.retryCredit != nil ? "Retry same reset" : "Use next reset")
+                }
+                .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).frame(height: 34)
             }
+            .buttonStyle(HoverButtonStyle(isCard: true))
+            .disabled(store.isApplying || store.isLoading || (store.credits.isEmpty && store.retryCredit == nil) || account.status != "active")
         }
         .padding(14).frame(width: 320).tint(.blue)
         .alert("Use a reset?", isPresented: $showingConfirmation, presenting: store.confirmation) { _ in
