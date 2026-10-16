@@ -162,11 +162,6 @@ private struct ResetCreditRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "arrow.counterclockwise")
-                .foregroundStyle(.blue).frame(width: 36, height: 36)
-                .background(LinearGradient(colors: [.blue.opacity(0.15), .indigo.opacity(0.08)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: RoundedRectangle(cornerRadius: 8))
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(credit.displayTitle).font(.system(size: 12, weight: .medium)).foregroundStyle(.primary)
                 Text(credit.expiryText).font(.system(size: 10)).foregroundStyle(.secondary)
