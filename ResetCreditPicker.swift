@@ -1,47 +1,63 @@
 import SwiftUI
 
-struct AccountActionsMenu: View {
+struct ResetCreditButton: View {
     let account: AccountSummary
     @ObservedObject var store: ResetCreditStore
     @ObservedObject var model: StatusViewModel
-    let openAccount: () -> Void
+    @State private var hovered = false
 
     private var isPresented: Binding<Bool> {
         Binding(get: { model.resetPopoverAccountID == account.id },
                 set: { model.resetPopoverAccountID = $0 ? account.id : nil })
     }
+    private var availableCount: Int? {
+        store.snapshot?.availableCredits().count ?? account.availableResetCredits
+    }
+    private var hasNoResets: Bool { availableCount == 0 }
+    // A pending operation must remain reachable even after its last credit was spent.
+    private var isDisabled: Bool {
+        hasNoResets && store.retryCredit == nil && !store.isApplying && !store.isLoading
+    }
     private var countText: String {
         if store.isApplying { return "Applying reset…" }
         if store.retryCredit != nil { return "Check reset" }
-        let count = store.snapshot?.availableCredits().count ?? account.availableResetCredits
-        return count.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "Manage resets…"
+        return availableCount.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "View available resets"
     }
 
     var body: some View {
-        Menu {
-            Button { isPresented.wrappedValue = true } label: {
-                Label(countText, systemImage: "arrow.counterclockwise")
-            }
-            Button(action: openAccount) {
-                Label("Open dashboard", systemImage: "arrow.up.right.square")
-            }
-        } label: {
+        Button { isPresented.wrappedValue.toggle() } label: {
             Group {
                 if store.isApplying || store.isLoading {
                     ProgressView().controlSize(.mini).frame(width: 10, height: 10)
                 } else {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "arrow.counterclockwise")
                 }
             }
             .font(.system(size: 14, weight: .medium))
-            .frame(width: 24, height: 30)
+            .foregroundStyle(isDisabled ? Color.primary.opacity(0.18) : hovered ? Color.blue : Color.secondary)
+            .frame(width: 30, height: 30)
+            .background(.primary.opacity(hovered && !isDisabled ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                if let count = availableCount, count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.5)
+                        .frame(width: 16, height: 16)
+                        .background(.blue, in: Circle())
+                        .offset(x: 3, y: -3)
+                        .accessibilityHidden(true)
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
         .fixedSize()
-        .help("Account options for \(account.email)")
-        .accessibilityLabel("Account options for \(account.email)")
+        .help("\(countText) for \(account.email)")
+        .accessibilityLabel("\(countText) for \(account.email)")
+        .accessibilityValue(isPresented.wrappedValue ? "Expanded" : "Collapsed")
+        .onHover { hovered = $0 }
         .onChange(of: account.availableResetCredits) { _ in
             if store.snapshot != nil { Task { await store.load() } }
         }

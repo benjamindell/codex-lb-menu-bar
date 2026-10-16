@@ -110,8 +110,7 @@ private struct AccountCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open \(account.title) in Codex LB")
-                AccountActionsMenu(account: account, store: model.resetStore(for: account), model: model,
-                                   openAccount: openAccount)
+                ResetCreditButton(account: account, store: model.resetStore(for: account), model: model)
             }
             if hasPrimary {
                 QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
