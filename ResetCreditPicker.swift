@@ -68,11 +68,12 @@ private struct ResetCreditPicker: View {
     @ObservedObject var store: ResetCreditStore
     let close: () -> Void
 
+    private var rowsHeight: CGFloat { CGFloat(store.credits.count) * 76 - 12 }
     private var contentHeight: CGFloat {
-        store.credits.isEmpty ? 72 : min(CGFloat(store.credits.count) * 56 - 4, 276)
+        store.credits.isEmpty ? 72 : min(rowsHeight, 276)
     }
     private var creditRows: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 12) {
             ForEach(store.credits) { credit in
                 ResetCreditRow(credit: credit, isApplying: store.applyingCreditID == credit.id)
             }
@@ -106,7 +107,7 @@ private struct ResetCreditPicker: View {
                             .font(.system(size: 12)).multilineTextAlignment(.center)
                     }.foregroundStyle(.secondary).padding(.vertical, 16)
                 } else {
-                    if store.credits.count > 5 {
+                    if rowsHeight > 276 {
                         ScrollView { creditRows }
                     } else {
                         creditRows
@@ -168,6 +169,7 @@ private struct ResetCreditRow: View {
             }.lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             if isApplying { ProgressView().controlSize(.small).frame(width: 16, height: 16) }
         }
-        .padding(.vertical, 8).frame(height: 52)
+        .frame(height: 32)
+        .panelCard()
     }
 }
