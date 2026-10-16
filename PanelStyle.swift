@@ -38,6 +38,15 @@ struct SectionHeading: View {
     }
 }
 
+struct CompactLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+            configuration.title
+        }
+    }
+}
+
 struct QuietIconButton: View {
     let symbol: String
     let title: String

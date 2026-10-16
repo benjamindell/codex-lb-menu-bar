@@ -69,6 +69,7 @@ private struct QuotaRow: View {
                 Spacer(minLength: 0)
                 if let warmupText {
                     Label(warmupText, systemImage: warmupEnabled ? "bolt.fill" : "bolt.slash")
+                        .labelStyle(CompactLabelStyle())
                         .foregroundStyle(warmupEnabled ? Color.blue : Color.secondary)
                         .fixedSize()
                 }
@@ -128,6 +129,7 @@ private struct AccountCard: View {
                     HStack {
                         Spacer()
                         Label(warmupText, systemImage: account.limitWarmupEnabled == true ? "bolt.fill" : "bolt.slash")
+                            .labelStyle(CompactLabelStyle())
                             .foregroundStyle(account.limitWarmupEnabled == true ? Color.blue : Color.secondary)
                     }
                     .font(.system(size: 10))
@@ -272,6 +274,7 @@ struct MenuContentView: View {
         HStack(spacing: 4) {
             Button(action: showSettingsMenu) {
                 Label("Settings", systemImage: "gearshape")
+                    .labelStyle(CompactLabelStyle())
                     .font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 12).frame(height: 32)
             }
@@ -279,6 +282,7 @@ struct MenuContentView: View {
             .background(SettingsMenuAnchor(view: settingsMenuAnchor))
             Button(action: openDashboard) {
                 Label("Dashboard", systemImage: "chart.bar.xaxis")
+                    .labelStyle(CompactLabelStyle())
                     .font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 12).frame(height: 32)
             }
