@@ -14,6 +14,15 @@ enum StatusBarLogicTests {
         }
 
         let now = Date(timeIntervalSince1970: 1_700_000_000)
+        assert(AccountPauseAction(status: "active") == .pause)
+        assert(AccountPauseAction(status: "rate_limited") == .pause)
+        assert(AccountPauseAction(status: "quota_exceeded") == .pause)
+        assert(AccountPauseAction(status: "paused") == .resume)
+        assert(AccountPauseAction(status: "deactivated") == nil)
+        assert(AccountPauseAction(status: "reauth_required") == nil)
+        assert(AccountPauseAction(status: "unknown") == nil)
+        assert(AccountPauseAction.pause.path(accountID: "a/b?c#") == "/api/accounts/a%2Fb%3Fc%23/pause")
+        assert(AccountPauseAction.resume.path(accountID: "account") == "/api/accounts/account/reactivate")
         assert(relativeReset(now.addingTimeInterval(2 * 86_400 + 3 * 3_600), now: now) == "Reset in 2d 3h")
         assert(relativeReset(now.addingTimeInterval(45 * 60), now: now) == "Reset in 45m")
         assert(relativeReset(now.addingTimeInterval(-1), now: now) == "Reset now")

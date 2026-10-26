@@ -96,9 +96,11 @@ private struct AccountCard: View {
     private var hasMultipleWindows: Bool {
         [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count > 1
     }
+    private var resetAvailability: ResetCreditAvailability {
+        account.resetAvailability(snapshot: resetStore.snapshot)
+    }
     private var nextCreditExpiresAt: Date? {
-        guard hovered, account.availableResetCredits != 0 else { return nil }
-        return resetStore.credits.first?.expiresAt
+        hovered ? resetAvailability.nearestExpiry : nil
     }
 
     var body: some View {
@@ -112,6 +114,9 @@ private struct AccountCard: View {
                             .frame(width: 34, height: 34)
                             .background(account.status == "active" ? .blue.opacity(0.10) : .primary.opacity(0.04),
                                         in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(alignment: .topLeading) {
+                                ResetCreditBadge(availability: resetAvailability, isCardHovered: hovered)
+                            }
                         VStack(alignment: .leading, spacing: 3) {
                             Text(account.email).font(.system(size: 13, weight: .medium)).lineLimit(1)
                             Text(account.planType.capitalized + " · " + account.status.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -123,8 +128,7 @@ private struct AccountCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open \(account.title) in Codex LB")
-                ResetCreditButton(account: account, store: resetStore, model: model,
-                                  isCardHovered: hovered)
+                AccountActionsMenu(account: account, store: resetStore, model: model)
             }
             if hasPrimary {
                 QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
@@ -140,6 +144,11 @@ private struct AccountCard: View {
                 QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
                          nextCreditExpiresAt: nextCreditExpiresAt,
                          showWindowTitle: hasMultipleWindows, openAccount: openAccount)
+            }
+            if let message = model.accountActionErrors[account.id] {
+                Label(message, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 10)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let warmup = account.limitWarmup {
                 Text("Last warm-up: \(warmup.status.replacingOccurrences(of: "_", with: " ")) · \(elapsedSince(warmup.completedAt ?? warmup.attemptedAt) ?? "just now")")
@@ -290,7 +299,7 @@ struct MenuContentView: View {
                     .padding(.horizontal, 12).frame(height: 32)
             }
             .buttonStyle(HoverButtonStyle(isCard: true))
-            .background(SettingsMenuAnchor(view: settingsMenuAnchor))
+            .background(MenuAnchor(view: settingsMenuAnchor))
             Button(action: openDashboard) {
                 Label("Dashboard", systemImage: "chart.bar.xaxis")
                     .labelStyle(CompactLabelStyle())
@@ -311,12 +320,12 @@ struct MenuContentView: View {
     private func showSettingsMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(SettingsMenuItem(title: "Config Server…", action: configureServer))
-        let launchItem = SettingsMenuItem(title: "Launch at Login", action: toggleLaunchAtLogin)
+        menu.addItem(ActionMenuItem(title: "Config Server…", action: configureServer))
+        let launchItem = ActionMenuItem(title: "Launch at Login", action: toggleLaunchAtLogin)
         launchItem.state = actions.launchAtLogin ? .on : .off
         menu.addItem(launchItem)
         menu.addItem(.separator())
-        let updateItem = SettingsMenuItem(title: actions.updateTitle, action: checkForUpdates)
+        let updateItem = ActionMenuItem(title: actions.updateTitle, action: checkForUpdates)
         updateItem.isEnabled = !actions.updateBusy
         menu.addItem(updateItem)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: settingsMenuAnchor)
@@ -326,13 +335,13 @@ struct MenuContentView: View {
 
 // The visible control uses the same SwiftUI Button as Dashboard. This view only
 // supplies the native menu's anchor, so NSMenu cannot override the button size.
-private struct SettingsMenuAnchor: NSViewRepresentable {
+struct MenuAnchor: NSViewRepresentable {
     let view: NSView
     func makeNSView(context: Context) -> NSView { view }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-@MainActor private final class SettingsMenuItem: NSMenuItem {
+@MainActor final class ActionMenuItem: NSMenuItem {
     private let handler: () -> Void
 
     init(title: String, action: @escaping () -> Void) {

@@ -1,61 +1,64 @@
 import SwiftUI
 
-struct ResetCreditButton: View {
+struct ResetCreditBadge: View {
+    let availability: ResetCreditAvailability
+    let isCardHovered: Bool
+
+    var body: some View {
+        if let count = availability.count, count > 0 {
+            Text("\(count)")
+                .font(.system(size: 7, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1).minimumScaleFactor(0.5)
+                .frame(width: 12, height: 12)
+                .background(availability.expiresSoon ? Color.red : isCardHovered ? Color.blue : Color(nsColor: .darkGray), in: Circle())
+                .offset(x: -2, y: -2)
+                .accessibilityLabel("\(count) resets available" + (availability.expiresSoon ? ", next reset expires within 3 days" : ""))
+        }
+    }
+}
+
+struct AccountActionsMenu: View {
     let account: AccountSummary
     @ObservedObject var store: ResetCreditStore
     @ObservedObject var model: StatusViewModel
-    let isCardHovered: Bool
+    @State private var menuAnchor = NSView()
 
     private var isPresented: Binding<Bool> {
         Binding(get: { model.resetPopoverAccountID == account.id },
                 set: { model.resetPopoverAccountID = $0 ? account.id : nil })
     }
-    private var availableCount: Int? {
-        store.snapshot?.availableCredits().count ?? account.availableResetCredits
-    }
-    private var hasNoResets: Bool { availableCount == 0 }
-    // A pending operation must remain reachable even after its last credit was spent.
-    private var isDisabled: Bool {
-        hasNoResets && store.retryCredit == nil && !store.isApplying && !store.isLoading
-    }
+    private var isChangingAccount: Bool { model.changingAccountIDs.contains(account.id) }
     private var countText: String {
-        if store.isApplying { return "Applying reset…" }
-        if store.retryCredit != nil { return "Check reset" }
-        return availableCount.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "View available resets"
+        let count = account.resetAvailability(snapshot: store.snapshot).count
+        let title = count.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "View available resets"
+        if store.isApplying { return title + " · Applying…" }
+        if store.retryCredit != nil { return title + " · Check previous reset" }
+        return title
     }
 
     var body: some View {
-        Button { isPresented.wrappedValue.toggle() } label: {
+        Button(action: showMenu) {
             Group {
-                if store.isApplying || store.isLoading {
+                if isChangingAccount {
                     ProgressView().controlSize(.mini).frame(width: 10, height: 10)
                 } else {
-                    Image(systemName: "arrow.counterclockwise")
+                    Image(systemName: "ellipsis")
                 }
             }
             .font(.system(size: 14, weight: .medium))
             .frame(width: 30, height: 30)
-            .overlay(alignment: .topTrailing) {
-                if let count = availableCount, count > 0 {
-                    Text("\(count)")
-                        .font(.system(size: 7, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(.white)
-                        .lineLimit(1).minimumScaleFactor(0.5)
-                        .frame(width: 12, height: 12)
-                        .background(isCardHovered ? Color.blue : Color(nsColor: .darkGray), in: Circle())
-                        .offset(x: 2, y: -2)
-                        .accessibilityHidden(true)
-                }
-            }
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(HoverButtonStyle(isCard: true, isLoading: store.isApplying || store.isLoading))
-        .disabled(isDisabled)
+        .buttonStyle(HoverButtonStyle(isCard: true, isLoading: isChangingAccount))
         .fixedSize()
-        .help("\(countText) for \(account.email)")
-        .accessibilityLabel("\(countText) for \(account.email)")
-        .accessibilityValue(isPresented.wrappedValue ? "Expanded" : "Collapsed")
+        .background(MenuAnchor(view: menuAnchor))
+        .help("Account options for \(account.email)")
+        .accessibilityLabel("Account options for \(account.email)")
         .onChange(of: account.availableResetCredits) { _ in
+            if store.snapshot != nil { Task { await store.load() } }
+        }
+        .onChange(of: account.resetCreditNearestExpiresAt) { _ in
             if store.snapshot != nil { Task { await store.load() } }
         }
         .popover(isPresented: isPresented, arrowEdge: .bottom) {
@@ -65,6 +68,25 @@ struct ResetCreditButton: View {
                     await store.load()
                 }
         }
+    }
+
+    private func showMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(ActionMenuItem(title: countText) {
+            // Present after the native dropdown has finished dismissing.
+            DispatchQueue.main.async { isPresented.wrappedValue = true }
+        })
+        menu.addItem(.separator())
+        let action = AccountPauseAction(status: account.status)
+        let item = ActionMenuItem(title: isChangingAccount ? "Updating account…" : action?.title ?? "Pause account") {
+            guard let action else { return }
+            Task { await model.changeAccountState(account, action: action) }
+        }
+        item.image = NSImage(systemSymbolName: action?.symbol ?? "pause", accessibilityDescription: nil)
+        item.isEnabled = action != nil && !isChangingAccount && !store.isApplying
+        menu.addItem(item)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: menuAnchor)
     }
 }
 

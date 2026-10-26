@@ -8,8 +8,10 @@ import SwiftUI
 private let defaultBaseURL = "http://127.0.0.1:2455"
 
 final class SettingsStore {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let baseURLKey = "codexLBBaseURL"
+
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
     var baseURLString: String {
         get { defaults.string(forKey: baseURLKey) ?? defaultBaseURL }
@@ -305,6 +307,11 @@ struct AccountSummary: Decodable, Identifiable {
 
     var id: String { accountId }
     var title: String { (alias?.isEmpty == false ? alias : displayName) ?? displayName }
+
+    func resetAvailability(snapshot: ResetCreditSnapshot?) -> ResetCreditAvailability {
+        ResetCreditAvailability(snapshot: snapshot, count: availableResetCredits,
+                                nearestExpiry: resetCreditNearestExpiresAt)
+    }
 }
 
 struct AccountUsage: Decodable {
@@ -330,9 +337,8 @@ private final class CodexLBClient: ResetCreditAPI {
     private let decoder: JSONDecoder
     private(set) var serverVersion: String?
 
-    init(settings: SettingsStore) {
+    init(settings: SettingsStore, configuration: URLSessionConfiguration = .default) {
         self.settings = settings
-        let configuration = URLSessionConfiguration.default
         configuration.httpCookieStorage = HTTPCookieStorage.shared
         configuration.httpCookieAcceptPolicy = .always
         configuration.httpShouldSetCookies = true
@@ -366,6 +372,11 @@ private final class CodexLBClient: ResetCreditAPI {
     func consumeResetCredit(accountID: String, requestID: String) async throws -> ResetCreditResult {
         let body = try ResetCreditRequest.body(requestID: requestID)
         return try await request(path: ResetCreditRequest.path(accountID: accountID) + "/consume", method: "POST", body: body)
+    }
+
+    func setAccountState(accountID: String, action: AccountPauseAction) async throws {
+        struct Response: Decodable { let status: String }
+        let _: Response = try await request(path: action.path(accountID: accountID), method: "POST")
     }
 
     private func request<T: Decodable>(path: String, method: String = "GET", body: Data? = nil) async throws -> T {
@@ -415,6 +426,8 @@ final class StatusViewModel: ObservableObject {
     @Published var availableHeight: CGFloat = 720
     @Published var measuredContentHeight: CGFloat?
     @Published var resetPopoverAccountID: String?
+    @Published private(set) var changingAccountIDs: Set<String> = []
+    @Published private(set) var accountActionErrors: [String: String] = [:]
     private var resetStores: [String: ResetCreditStore] = [:]
 
     let settings: SettingsStore
@@ -424,9 +437,9 @@ final class StatusViewModel: ObservableObject {
     private var refreshAfterCurrent = false
     private var automaticLoginFailedAccount: String?
 
-    init(settings: SettingsStore) {
+    init(settings: SettingsStore, sessionConfiguration: URLSessionConfiguration = .default) {
         self.settings = settings
-        client = CodexLBClient(settings: settings)
+        client = CodexLBClient(settings: settings, configuration: sessionConfiguration)
     }
 
     func resetStore(for account: AccountSummary) -> ResetCreditStore {
@@ -438,6 +451,29 @@ final class StatusViewModel: ObservableObject {
         }
         resetStores[account.accountId] = store
         return store
+    }
+
+    func changeAccountState(_ account: AccountSummary, action: AccountPauseAction) async {
+        guard !changingAccountIDs.contains(account.id),
+              let current = overview?.accounts.first(where: { $0.id == account.id }),
+              AccountPauseAction(status: current.status) == action else { return }
+        let operationClient = client
+        changingAccountIDs.insert(account.id)
+        accountActionErrors[account.id] = nil
+        defer {
+            if client === operationClient { changingAccountIDs.remove(account.id) }
+        }
+        do {
+            try await operationClient.setAccountState(accountID: account.id, action: action)
+            // Wait out an older overview read before fetching the confirmed state.
+            if let refreshTask { await refreshTask.value }
+            guard client === operationClient else { return }
+            refresh()
+            await refreshTask?.value
+        } catch {
+            guard client === operationClient else { return }
+            accountActionErrors[account.id] = "\(action.title) failed: \(error.localizedDescription)"
+        }
     }
 
     var activeCount: Int { overview?.accounts.filter { $0.status == "active" }.count ?? 0 }
@@ -518,6 +554,8 @@ final class StatusViewModel: ObservableObject {
 
     func changeServerURL(_ value: String, refreshImmediately: Bool = true) {
         resetPopoverAccountID = nil
+        changingAccountIDs.removeAll()
+        accountActionErrors.removeAll()
         resetStores.removeAll()
         settings.baseURLString = value
         client = CodexLBClient(settings: settings)
@@ -883,7 +921,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+#if !TESTING
 @main
+#endif
 private enum CodexLBMenuBarMain {
     @MainActor static func main() {
         let app = NSApplication.shared

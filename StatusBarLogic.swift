@@ -1,5 +1,25 @@
 import Foundation
 
+enum AccountPauseAction {
+    case pause, resume
+
+    init?(status: String) {
+        switch status {
+        case "paused": self = .resume
+        case "active", "rate_limited", "quota_exceeded": self = .pause
+        default: return nil
+        }
+    }
+
+    var title: String { self == .pause ? "Pause account" : "Resume account" }
+    var symbol: String { self == .pause ? "pause" : "play" }
+
+    func path(accountID: String) -> String {
+        let component = accountID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? accountID
+        return "/api/accounts/\(component)/\(self == .pause ? "pause" : "reactivate")"
+    }
+}
+
 enum AuthenticationRecoveryAction: Equatable {
     case none
     case useStoredPassword

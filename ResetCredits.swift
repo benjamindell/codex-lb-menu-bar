@@ -25,6 +25,25 @@ struct ResetCreditSnapshot: Decodable {
     }
 }
 
+// Use the overview immediately, then prefer the detailed credit list once loaded.
+struct ResetCreditAvailability {
+    let count: Int?
+    let nearestExpiry: Date?
+    let expiresSoon: Bool
+
+    init(snapshot: ResetCreditSnapshot?, count: Int?, nearestExpiry: Date?, now: Date = Date()) {
+        if let snapshot {
+            let credits = snapshot.availableCredits(at: now)
+            self.count = credits.count
+            self.nearestExpiry = credits.first?.expiresAt
+        } else {
+            self.count = count
+            self.nearestExpiry = count == 0 ? nil : nearestExpiry.flatMap { $0 > now ? $0 : nil }
+        }
+        expiresSoon = self.nearestExpiry.map { $0.timeIntervalSince(now) <= 3 * 86_400 } ?? false
+    }
+}
+
 struct ResetCreditResult: Decodable {
     let code: String?
     let windowsReset: Int?

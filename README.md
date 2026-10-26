@@ -9,7 +9,8 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - 5-hour, weekly, and monthly progress bars with colour-coded remaining capacity.
 - Compact quota rows with reset countdowns such as `Resets in 2d 4h` above each progress bar.
 - Hovering over an account card shows `Next reset expires in …` for its soonest-expiring available reset. The usual quota countdown stays visible when no reset expiry is available and returns when the pointer leaves.
-- A reset icon on each account opens the existing picker, with a circular badge showing the available reset count. When there are no resets, the badge is hidden and the icon is muted and disabled; pending reset retries remain accessible. Clicking the rest of the card opens the account dashboard.
+- A circular reset-count badge sits at the top left of each account avatar. It turns red when the next available reset expires within 72 hours; otherwise it is grey, turning blue on hover. Accounts without resets have no badge.
+- An ellipsis menu on each card shows the reset count and opens the existing reset picker, including pending reset retries. It also offers **Pause account** or **Resume account** for paused accounts. Changes refresh the account status, prevent duplicate requests while running, and show failures on the card. Accounts requiring reauthentication or otherwise deactivated cannot be paused here. Clicking the rest of the card opens the account dashboard.
 - A full-width **Use next reset** action, which changes to a red confirmation prompt on the first click and spends the soonest-expiring reset on the second click. After success, it shows a disabled green **Reset applied** state; close and reopen the dropdown to use another reset.
 - Loading and applying indicators, plus safe retries that reuse the same request ID after a timeout or app restart.
 - The latest warm-up result when provided by the server.
@@ -43,16 +44,13 @@ To open the panel immediately for UI inspection, launch the built app with:
 
 This inspection mode activates the app and shows a Dock icon. Normal launches remain menu-bar-only.
 
-Run the logic, dropdown placement, and mocked reset checks with:
+Run the logic, dropdown placement, reset-expiry, and mocked reset/account-action checks with:
 
 ```bash
-swiftc StatusBarLogic.swift DropdownPlacement.swift CredentialStore.swift StatusBarLogicTests.swift -framework Security -o build/StatusBarLogicTests
-./build/StatusBarLogicTests
-swiftc -parse-as-library ResetCredits.swift ResetCreditsTests.swift -o build/ResetCreditsTests
-./build/ResetCreditsTests
+./script/test.sh
 ```
 
-The reset tests use a fake API and never spend live credits.
+The reset and account-action tests use fake APIs and never spend live credits or change live accounts.
 
 ## Publishing an update
 

@@ -35,6 +35,24 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         let snapshot = ResetCreditSnapshot(availableCount: 2, credits: [second, expired, used, first])
         expect(snapshot.availableCredits() == [first, second], "Filter expired/spent credits and sort by expiry")
         expect(ResetCreditSnapshot(availableCount: 0, credits: [first]).availableCredits().isEmpty, "Authoritative zero wins")
+        let threeDays = now.addingTimeInterval(3 * 86_400)
+        expect(ResetCreditAvailability(snapshot: nil, count: 1, nearestExpiry: threeDays, now: now).expiresSoon,
+               "Exactly three days is urgent")
+        expect(!ResetCreditAvailability(snapshot: nil, count: 1, nearestExpiry: threeDays.addingTimeInterval(1), now: now).expiresSoon,
+               "More than three days is not urgent")
+        expect(!ResetCreditAvailability(snapshot: nil, count: 0, nearestExpiry: threeDays, now: now).expiresSoon,
+               "No credits means no expiry warning")
+        expect(!ResetCreditAvailability(snapshot: nil, count: 1, nearestExpiry: now, now: now).expiresSoon,
+               "Expired credits do not produce an availability warning")
+        expect(!ResetCreditAvailability(snapshot: nil, count: 1, nearestExpiry: nil, now: now).expiresSoon,
+               "Missing expiry is not guessed")
+        let loaded = ResetCreditAvailability(snapshot: snapshot, count: 9, nearestExpiry: threeDays, now: now)
+        expect(loaded.count == 2 && loaded.nearestExpiry == first.expiresAt && loaded.expiresSoon,
+               "Loaded credits override the overview and select the soonest available expiry")
+        let empty = ResetCreditAvailability(snapshot: ResetCreditSnapshot(availableCount: 0, credits: [first]),
+                                            count: 9, nearestExpiry: threeDays, now: now)
+        expect(empty.count == 0 && empty.nearestExpiry == nil && !empty.expiresSoon,
+               "An authoritative empty snapshot removes the badge and warning")
         expect(ResetCreditRequest.path(accountID: "a/b?c#") == "/api/accounts/a%2Fb%3Fc%23/rate-limit-reset-credits", "Encode account path components")
         let body = try JSONSerialization.jsonObject(with: ResetCreditRequest.body(requestID: "same-id")) as! [String: String]
         expect(body == ["redeemRequestId": "same-id"], "Only send the supported idempotency field")
