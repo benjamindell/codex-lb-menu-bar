@@ -51,15 +51,23 @@ private struct QuotaRow: View {
     let title: String
     let value: Double?
     let resetAt: Date?
+    let nextCreditExpiresAt: Date?
     let showWindowTitle: Bool
     let openAccount: () -> Void
+
+    private var resetLabel: String {
+        let countdown = nextCreditExpiresAt.map {
+            relativeReset($0).replacingOccurrences(of: "Reset", with: "Next reset expires")
+        } ?? relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in")
+        return (showWindowTitle ? "\(title) · " : "") + countdown
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: openAccount) {
                 VStack(spacing: 6) {
                     HStack {
-                        Text((showWindowTitle ? "\(title) · " : "") + relativeReset(resetAt).replacingOccurrences(of: "Reset in", with: "Resets in"))
+                        Text(resetLabel)
                             .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer()
                         Text("\(roundedPercent(value)) left")
@@ -77,6 +85,7 @@ private struct QuotaRow: View {
 private struct AccountCard: View {
     let account: AccountSummary
     @ObservedObject var model: StatusViewModel
+    @ObservedObject var resetStore: ResetCreditStore
     let openAccount: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -86,6 +95,10 @@ private struct AccountCard: View {
     private var hasMonthly: Bool { account.windowMinutesMonthly != nil || account.usage?.monthlyRemainingPercent != nil }
     private var hasMultipleWindows: Bool {
         [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count > 1
+    }
+    private var nextCreditExpiresAt: Date? {
+        guard hovered, account.availableResetCredits != 0 else { return nil }
+        return resetStore.credits.first?.expiresAt
     }
 
     var body: some View {
@@ -110,19 +123,22 @@ private struct AccountCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open \(account.title) in Codex LB")
-                ResetCreditButton(account: account, store: model.resetStore(for: account), model: model,
+                ResetCreditButton(account: account, store: resetStore, model: model,
                                   isCardHovered: hovered)
             }
             if hasPrimary {
                 QuotaRow(title: "5-hour", value: account.usage?.primaryRemainingPercent, resetAt: account.resetAtPrimary,
+                         nextCreditExpiresAt: nextCreditExpiresAt,
                          showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if hasWeekly {
                 QuotaRow(title: "Weekly", value: account.usage?.secondaryRemainingPercent, resetAt: account.resetAtSecondary,
+                         nextCreditExpiresAt: nextCreditExpiresAt,
                          showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if hasMonthly {
                 QuotaRow(title: "Monthly", value: account.usage?.monthlyRemainingPercent, resetAt: account.resetAtMonthly,
+                         nextCreditExpiresAt: nextCreditExpiresAt,
                          showWindowTitle: hasMultipleWindows, openAccount: openAccount)
             }
             if let warmup = account.limitWarmup {
@@ -142,6 +158,10 @@ private struct AccountCard: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 18).fill(.primary.opacity(hovered ? 0.035 : 0)).allowsHitTesting(false))
         .onHover { hovered = $0 }
+        .task(id: hovered) {
+            guard hovered, account.availableResetCredits != 0 else { return }
+            await resetStore.load()
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: hovered)
     }
 }
@@ -170,7 +190,7 @@ struct MenuContentView: View {
                 VStack(spacing: 12) {
                     if !sortedAccounts.isEmpty {
                         ForEach(sortedAccounts) { account in
-                            AccountCard(account: account, model: model) { openAccount(account) }
+                            AccountCard(account: account, model: model, resetStore: model.resetStore(for: account)) { openAccount(account) }
                         }
                     } else if model.errorMessage == nil {
                         emptyState

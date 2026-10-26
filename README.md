@@ -8,6 +8,7 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - Every connected Codex LB account, including status and email/account identity.
 - 5-hour, weekly, and monthly progress bars with colour-coded remaining capacity.
 - Compact quota rows with reset countdowns such as `Resets in 2d 4h` above each progress bar.
+- Hovering over an account card shows `Next reset expires in …` for its soonest-expiring available reset. The usual quota countdown stays visible when no reset expiry is available and returns when the pointer leaves.
 - A reset icon on each account opens the existing picker, with a circular badge showing the available reset count. When there are no resets, the badge is hidden and the icon is muted and disabled; pending reset retries remain accessible. Clicking the rest of the card opens the account dashboard.
 - A full-width **Use next reset** action, which changes to a red confirmation prompt on the first click and spends the soonest-expiring reset on the second click. After success, it shows a disabled green **Reset applied** state; close and reopen the dropdown to use another reset.
 - Loading and applying indicators, plus safe retries that reuse the same request ID after a timeout or app restart.
