@@ -16,6 +16,7 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 - The latest warm-up result when provided by the server.
 - Automatic refresh every 60 seconds and an immediate refresh button.
 - Rounded account cards with hover states and account links that open the selected account in `/accounts?selected=…`.
+- Account cards stay in alphabetical order regardless of status. Paused cards use 50% opacity and retain their working account menu for resuming.
 - Footer buttons for Settings, Dashboard, Refresh, and Quit. Settings contains server configuration, launch-at-login, and update checks.
 - GitHub Releases update checks with an install-and-relaunch action when a newer version is available.
 

@@ -166,6 +166,7 @@ private struct AccountCard: View {
                 .buttonStyle(.plain).accessibilityHidden(true)
         }
         .overlay(RoundedRectangle(cornerRadius: 18).fill(.primary.opacity(hovered ? 0.035 : 0)).allowsHitTesting(false))
+        .opacity(account.status == "paused" ? 0.5 : 1)
         .onHover { hovered = $0 }
         .task(id: hovered) {
             guard hovered, account.availableResetCredits != 0 else { return }
@@ -188,7 +189,7 @@ struct MenuContentView: View {
 
     private var sortedAccounts: [AccountSummary] {
         (model.overview?.accounts ?? []).sorted {
-            ($0.status == "active" ? 0 : 1, $0.title.lowercased()) < ($1.status == "active" ? 0 : 1, $1.title.lowercased())
+            ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id)
         }
     }
 
