@@ -21,6 +21,8 @@ A native macOS menu bar companion for [codex-lb](https://github.com/Soju06/codex
 
 Viewing reset credits is read-only. Applying a reset requires dashboard write access and explicit confirmation. The server selects the next available reset to expire; individual credits are informational rows. If a request times out, **Retry same reset** checks the original operation instead of spending another credit. Pending request IDs are stored per server and account in preferences; credentials remain in Keychain.
 
+Pausing keeps the last known reset count and expiry visible for the current app session. Paused accounts do not refresh or redeem resets; the popover explains that the account must be resumed first. If the app has no prior count for a paused account, it shows that the count is unavailable instead of claiming zero. Resuming refreshes availability from the server.
+
 Dashboard passwords are stored per server in the user's macOS login Keychain,
 never in preferences or ordinary files. When the server-side session expires,
 the app uses the saved password to establish a new session automatically. The

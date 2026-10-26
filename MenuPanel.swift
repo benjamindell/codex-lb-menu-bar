@@ -97,7 +97,7 @@ private struct AccountCard: View {
         [hasPrimary, hasWeekly, hasMonthly].filter { $0 }.count > 1
     }
     private var resetAvailability: ResetCreditAvailability {
-        account.resetAvailability(snapshot: resetStore.snapshot)
+        resetStore.availability
     }
     private var nextCreditExpiresAt: Date? {
         hovered ? resetAvailability.nearestExpiry : nil

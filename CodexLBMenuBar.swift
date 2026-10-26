@@ -307,11 +307,6 @@ struct AccountSummary: Decodable, Identifiable {
 
     var id: String { accountId }
     var title: String { (alias?.isEmpty == false ? alias : displayName) ?? displayName }
-
-    func resetAvailability(snapshot: ResetCreditSnapshot?) -> ResetCreditAvailability {
-        ResetCreditAvailability(snapshot: snapshot, count: availableResetCredits,
-                                nearestExpiry: resetCreditNearestExpiresAt)
-    }
 }
 
 struct AccountUsage: Decodable {
@@ -449,6 +444,8 @@ final class StatusViewModel: ObservableObject {
             if self.isRefreshing { self.refreshAfterCurrent = true }
             else { self.refresh() }
         }
+        store.updateAccount(status: account.status, count: account.availableResetCredits,
+                            nearestExpiry: account.resetCreditNearestExpiresAt)
         resetStores[account.accountId] = store
         return store
     }
@@ -458,6 +455,7 @@ final class StatusViewModel: ObservableObject {
               let current = overview?.accounts.first(where: { $0.id == account.id }),
               AccountPauseAction(status: current.status) == action else { return }
         let operationClient = client
+        let credits = resetStore(for: current)
         changingAccountIDs.insert(account.id)
         accountActionErrors[account.id] = nil
         defer {
@@ -466,7 +464,9 @@ final class StatusViewModel: ObservableObject {
         do {
             try await operationClient.setAccountState(accountID: account.id, action: action)
             guard client === operationClient else { return }
-            resetStores[account.id]?.invalidateSnapshot()
+            credits.updateAccount(status: action == .pause ? "paused" : "active",
+                                  count: current.availableResetCredits,
+                                  nearestExpiry: current.resetCreditNearestExpiresAt)
             // Wait out an older overview read before fetching the confirmed state.
             if let refreshTask { await refreshTask.value }
             guard client === operationClient else { return }
@@ -510,16 +510,11 @@ final class StatusViewModel: ObservableObject {
             try await recoverAuthenticationIfNeeded(session)
             let value = try await client.fetchOverview()
             for account in value.accounts {
-                guard let store = resetStores[account.id] else { continue }
-                let previous = overview?.accounts.first { $0.id == account.id }
-                let cachedCount = store.snapshot?.availableCredits().count
-                let countDisagrees = account.availableResetCredits.map { cachedCount != nil && cachedCount != $0 } ?? false
-                if previous?.status != account.status || previous?.availableResetCredits != account.availableResetCredits ||
-                   previous?.resetCreditNearestExpiresAt != account.resetCreditNearestExpiresAt || countDisagrees {
-                    store.invalidateSnapshot()
-                    if resetPopoverAccountID == account.id {
-                        Task { await store.load() }
-                    }
+                let store = resetStore(for: account)
+                store.updateAccount(status: account.status, count: account.availableResetCredits,
+                                    nearestExpiry: account.resetCreditNearestExpiresAt)
+                if resetPopoverAccountID == account.id && store.snapshot == nil {
+                    Task { await store.load() }
                 }
             }
             overview = value

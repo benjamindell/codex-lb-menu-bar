@@ -30,8 +30,9 @@ struct AccountActionsMenu: View {
     }
     private var isChangingAccount: Bool { model.changingAccountIDs.contains(account.id) }
     private var countText: String {
-        let count = account.resetAvailability(snapshot: store.snapshot).count
-        let title = count.map { "\($0) \($0 == 1 ? "reset" : "resets") available" } ?? "View available resets"
+        let count = store.availability.count
+        let title = count.map { "\($0) \($0 == 1 ? "reset" : "resets") available" }
+            ?? (store.isPaused ? "Reset count unavailable while paused" : "View available resets")
         if store.isApplying { return title + " · Applying…" }
         if store.retryCredit != nil { return title + " · Check previous reset" }
         return title
@@ -106,6 +107,15 @@ private struct ResetCreditPicker: View {
             }
         }
     }
+    private var emptyMessage: String {
+        if store.isPaused {
+            if let count = store.availability.count {
+                return "\(count) \(count == 1 ? "reset" : "resets") last known. Resume the account to refresh or use resets."
+            }
+            return "Reset count unavailable while paused. Resume the account to check."
+        }
+        return store.snapshot == nil ? "Reset availability is unavailable. Try refreshing." : "No resets available."
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -117,7 +127,7 @@ private struct ResetCreditPicker: View {
                 Spacer(minLength: 0)
                 QuietIconButton(symbol: "arrow.clockwise", title: "Refresh resets", isLoading: store.isLoading) {
                     Task { await store.load() }
-                }.disabled(store.isApplying)
+                }.disabled(store.isApplying || store.isPaused)
                 Divider().frame(height: 14)
                 QuietIconButton(symbol: "xmark", title: "Close resets", hoverColor: .red, action: close)
             }
@@ -130,7 +140,7 @@ private struct ResetCreditPicker: View {
                 } else if store.credits.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "arrow.counterclockwise").font(.system(size: 20, weight: .light))
-                        Text(store.snapshot == nil ? "Reset availability is unavailable. Try refreshing." : "No resets available.")
+                        Text(emptyMessage)
                             .font(.system(size: 12)).multilineTextAlignment(.center)
                     }.foregroundStyle(.secondary).padding(.vertical, 16)
                 } else {
@@ -142,6 +152,12 @@ private struct ResetCreditPicker: View {
                 }
             }
             .frame(maxWidth: .infinity).frame(height: contentHeight)
+
+            if store.isPaused && !store.credits.isEmpty {
+                Text("Last known resets. Resume the account to refresh or use them.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let message = store.errorMessage {
                 Label(message, systemImage: "exclamationmark.circle")

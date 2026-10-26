@@ -146,6 +146,39 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         api.readContinuation?.resume()
         await staleRead.value
         expect(relaunched.credits == [first, second], "A delayed empty read cannot replace fresh credits")
+        relaunched.updateAccount(status: "active", count: 2, nearestExpiry: first.expiresAt)
+        await relaunched.load()
+        relaunched.requestConfirmation()
+        api.snapshot = ResetCreditSnapshot(availableCount: 0, credits: [])
+        api.holdRead = true
+        api.readContinuation = nil
+        let readDuringPause = Task { await relaunched.load() }
+        while api.readContinuation == nil { await Task.yield() }
+        relaunched.updateAccount(status: "paused", count: 0, nearestExpiry: nil)
+        api.readContinuation?.resume()
+        await readDuringPause.value
+        api.holdRead = false
+        expect(relaunched.availability.count == 2 && relaunched.credits == [first, second],
+               "Pausing preserves credits even when an in-flight read returns zero")
+        expect(relaunched.availability.nearestExpiry == first.expiresAt && relaunched.availability.expiresSoon,
+               "Expiry warning survives pausing")
+        expect(relaunched.confirmation == nil && relaunched.isBlocked, "Pausing cancels unconfirmed redemption")
+        let consumedBeforePaused = api.requests.count
+        await relaunched.confirm()
+        await relaunched.retry()
+        expect(api.requests.count == consumedBeforePaused, "Paused accounts cannot redeem")
+        api.snapshot = ResetCreditSnapshot(availableCount: 0, credits: [])
+        await relaunched.load()
+        relaunched.updateAccount(status: "paused", count: 0, nearestExpiry: nil)
+        expect(relaunched.availability.count == 2, "Paused reads and repeated overview zeros cannot erase known resets")
+        let initiallyPaused = ResetCreditStore(accountID: "unknown-paused", server: "https://test", api: api, defaults: defaults)
+        initiallyPaused.updateAccount(status: "paused", count: 0, nearestExpiry: nil)
+        expect(initiallyPaused.availability.count == nil, "An initially paused account has unknown inventory, not zero")
+        relaunched.updateAccount(status: "active", count: 1, nearestExpiry: second.expiresAt)
+        expect(relaunched.snapshot == nil && relaunched.availability.count == 1,
+               "Resuming replaces remembered inventory with the fresh overview")
+        await relaunched.load()
+        expect(relaunched.availability.count == 0, "A real active zero remains authoritative")
         print("Reset credit tests passed (no live resets consumed)")
     }
 }

@@ -30,11 +30,12 @@ private final class MockAccountProtocol: URLProtocol {
         var mutationPaths: [String] = []
         var failMutation = false
         var holdMutation = false
+        var creditReads = 0
         var pending: CheckedContinuation<Void, Never>?
         func overviewData() -> Data {
             Data("""
             {"accounts":[{"accountId":"test-account","email":"test@example.invalid","displayName":"Test",
-            "planType":"pro","routingPolicy":"normal","status":"\(status)","availableResetCredits":2}]}
+            "planType":"pro","routingPolicy":"normal","status":"\(status)","availableResetCredits":\(status == "paused" ? 0 : 2)}]}
             """.utf8)
         }
         MockAccountProtocol.handle = { request in
@@ -48,6 +49,7 @@ private final class MockAccountProtocol: URLProtocol {
             if path == "/api/dashboard/overview" { return (200, overviewData()) }
             if path == "/api/accounts/test-account/rate-limit-reset-credits" {
                 assert(request.httpMethod == "GET")
+                creditReads += 1
                 return (200, Data("{\"availableCount\":0,\"credits\":[]}".utf8))
             }
             assert(request.httpMethod == "POST" && request.httpBody == nil)
@@ -82,7 +84,19 @@ private final class MockAccountProtocol: URLProtocol {
         assert(model.overview?.accounts.first?.status == "paused", "Refresh must reflect the confirmed pause")
         assert(model.accountActionErrors.isEmpty)
         assert(resetStore.snapshot == nil, "Pause must discard stale reset details")
-        assert(model.overview!.accounts[0].resetAvailability(snapshot: resetStore.snapshot).count == 2)
+        assert(model.overview!.accounts[0].availableResetCredits == 0, "Reproduce the server's paused zero")
+        assert(resetStore.availability.count == 2, "Paused zero must not replace the known inventory")
+        let readsBeforePaused = creditReads
+        await resetStore.load()
+        assert(creditReads == readsBeforePaused, "Do not read unavailable credits while paused")
+        let previousRefresh = model.lastRefreshedAt
+        model.refresh()
+        for _ in 0..<1_000 {
+            if model.lastRefreshedAt != previousRefresh && !model.isRefreshing { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        assert(model.lastRefreshedAt != previousRefresh, "The paused overview refresh must finish")
+        assert(resetStore.availability.count == 2, "Repeated paused refreshes must retain the count")
 
         await model.changeAccountState(active, action: .pause)
         assert(mutationPaths.count == 1, "A stale menu action must not mutate a changed account")

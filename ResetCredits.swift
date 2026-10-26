@@ -81,6 +81,9 @@ final class ResetCreditStore: ObservableObject {
     @Published private(set) var confirmation: ResetCredit?
     @Published private(set) var errorMessage: String?
     @Published private(set) var hasAppliedReset = false
+    @Published private(set) var isPaused = false
+    @Published private var overviewCount: Int?
+    @Published private var overviewExpiry: Date?
     @Published private var pending: PendingReset?
 
     let accountID: String
@@ -101,9 +104,44 @@ final class ResetCreditStore: ObservableObject {
     }
 
     var credits: [ResetCredit] { snapshot?.availableCredits() ?? [] }
+    var availability: ResetCreditAvailability {
+        // Without individual dates, an expired summary cannot tell us how many
+        // of the remembered credits remain. Show unknown until a fresh read.
+        let summaryExpired = isPaused && overviewExpiry.map { $0 <= Date() } == true
+        return ResetCreditAvailability(snapshot: snapshot,
+                                       count: summaryExpired ? nil : overviewCount,
+                                       nearestExpiry: overviewExpiry)
+    }
     var retryCredit: ResetCredit? { pending?.credit }
     var applyingCreditID: String? { isApplying ? pending?.credit.id : nil }
-    var isBlocked: Bool { isLoading || isApplying || hasAppliedReset || confirmation != nil || pending != nil }
+    var isBlocked: Bool { isPaused || isLoading || isApplying || hasAppliedReset || confirmation != nil || pending != nil }
+
+    func updateAccount(status: String, count: Int?, nearestExpiry: Date?) {
+        let paused = status == "paused"
+        let statusChanged = paused != isPaused
+        if paused {
+            // Paused endpoints may report zero usable credits. That is not an
+            // inventory update: retain the last known count and expiry instead.
+            if statusChanged {
+                let staleZero = snapshot?.availableCredits().isEmpty == true && (overviewCount ?? 0) > 0
+                invalidateSnapshot(preservingCredits: !staleZero)
+                confirmation = nil
+            }
+            if overviewCount == nil, let count, count > 0 {
+                overviewCount = count
+                overviewExpiry = nearestExpiry
+            }
+        } else {
+            let cachedCount = snapshot?.availableCredits().count
+            if statusChanged || overviewCount != count || overviewExpiry != nearestExpiry ||
+               (count != nil && cachedCount != nil && cachedCount != count) {
+                invalidateSnapshot()
+            }
+            overviewCount = count
+            overviewExpiry = nearestExpiry
+        }
+        isPaused = paused
+    }
 
     func beginPresentation() {
         hasAppliedReset = false
@@ -112,14 +150,14 @@ final class ResetCreditStore: ObservableObject {
 
     // A quota/status refresh supersedes cached credit details, including reads
     // started while an account was paused. Never let those restore an old zero.
-    func invalidateSnapshot() {
+    func invalidateSnapshot(preservingCredits: Bool = false) {
         loadGeneration += 1
-        snapshot = nil
+        if !preservingCredits { snapshot = nil }
         isLoading = false
     }
 
     func load() async {
-        guard !isLoading, !isApplying else { return }
+        guard !isPaused, !isLoading, !isApplying else { return }
         let generation = loadGeneration
         isLoading = true
         defer { if generation == loadGeneration { isLoading = false } }
@@ -146,7 +184,7 @@ final class ResetCreditStore: ObservableObject {
     func cancelConfirmation() { confirmation = nil }
 
     func confirm() async {
-        guard let credit = confirmation, !isApplying else { return }
+        guard !isPaused, let credit = confirmation, !isApplying else { return }
         confirmation = nil
         pending = PendingReset(credit: credit, requestID: UUID().uuidString)
         persistPending()
@@ -154,7 +192,7 @@ final class ResetCreditStore: ObservableObject {
     }
 
     func retry() async {
-        guard pending != nil, !isApplying, !isLoading else { return }
+        guard !isPaused, pending != nil, !isApplying, !isLoading else { return }
         await applyPending()
     }
 
