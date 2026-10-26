@@ -10,11 +10,15 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     var failConsume = false
     var waitForConsume = false
     var continuation: CheckedContinuation<Void, Never>?
+    var holdRead = false
+    var readContinuation: CheckedContinuation<Void, Never>?
     var requests: [(account: String, id: String)] = []
 
     func fetchResetCredits(accountID: String) async throws -> ResetCreditSnapshot? {
         if failRead { throw URLError(.notConnectedToInternet) }
-        return snapshot
+        let result = snapshot
+        if holdRead { await withCheckedContinuation { readContinuation = $0 } }
+        return result
     }
     func consumeResetCredit(accountID: String, requestID: String) async throws -> ResetCreditResult {
         requests.append((accountID, requestID))
@@ -127,6 +131,21 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         api.failRead = true
         await relaunched.load()
         expect(relaunched.errorMessage != nil && !relaunched.isLoading, "Read errors leave refresh available")
+        api.failRead = false
+        api.snapshot = ResetCreditSnapshot(availableCount: 0, credits: [])
+        await relaunched.load()
+        expect(relaunched.snapshot?.availableCount == 0, "Reproduce a cached empty credit list")
+        api.holdRead = true
+        let staleRead = Task { await relaunched.load() }
+        while api.readContinuation == nil { await Task.yield() }
+        relaunched.invalidateSnapshot()
+        expect(relaunched.snapshot == nil && !relaunched.isLoading, "Invalidation restores the overview fallback")
+        api.holdRead = false
+        api.snapshot = snapshot
+        await relaunched.load()
+        api.readContinuation?.resume()
+        await staleRead.value
+        expect(relaunched.credits == [first, second], "A delayed empty read cannot replace fresh credits")
         print("Reset credit tests passed (no live resets consumed)")
     }
 }

@@ -34,7 +34,7 @@ private final class MockAccountProtocol: URLProtocol {
         func overviewData() -> Data {
             Data("""
             {"accounts":[{"accountId":"test-account","email":"test@example.invalid","displayName":"Test",
-            "planType":"pro","routingPolicy":"normal","status":"\(status)"}]}
+            "planType":"pro","routingPolicy":"normal","status":"\(status)","availableResetCredits":2}]}
             """.utf8)
         }
         MockAccountProtocol.handle = { request in
@@ -46,6 +46,10 @@ private final class MockAccountProtocol: URLProtocol {
                 """.utf8))
             }
             if path == "/api/dashboard/overview" { return (200, overviewData()) }
+            if path == "/api/accounts/test-account/rate-limit-reset-credits" {
+                assert(request.httpMethod == "GET")
+                return (200, Data("{\"availableCount\":0,\"credits\":[]}".utf8))
+            }
             assert(request.httpMethod == "POST" && request.httpBody == nil)
             assert(path == "/api/accounts/test-account/pause" || path == "/api/accounts/test-account/reactivate")
             mutationPaths.append(path)
@@ -57,6 +61,9 @@ private final class MockAccountProtocol: URLProtocol {
         let model = StatusViewModel(settings: settings, sessionConfiguration: configuration)
         model.overview = try JSONDecoder().decode(DashboardOverview.self, from: overviewData())
         let active = model.overview!.accounts[0]
+        let resetStore = model.resetStore(for: active)
+        await resetStore.load()
+        assert(resetStore.snapshot?.availableCount == 0)
 
         holdMutation = true
         let pause = Task { await model.changeAccountState(active, action: .pause) }
@@ -74,6 +81,8 @@ private final class MockAccountProtocol: URLProtocol {
         assert(model.changingAccountIDs.isEmpty)
         assert(model.overview?.accounts.first?.status == "paused", "Refresh must reflect the confirmed pause")
         assert(model.accountActionErrors.isEmpty)
+        assert(resetStore.snapshot == nil, "Pause must discard stale reset details")
+        assert(model.overview!.accounts[0].resetAvailability(snapshot: resetStore.snapshot).count == 2)
 
         await model.changeAccountState(active, action: .pause)
         assert(mutationPaths.count == 1, "A stale menu action must not mutate a changed account")
@@ -88,6 +97,14 @@ private final class MockAccountProtocol: URLProtocol {
         await model.changeAccountState(paused, action: .resume)
         assert(model.overview?.accounts.first?.status == "active")
         assert(model.accountActionErrors.isEmpty)
+        await resetStore.load()
+        assert(resetStore.snapshot?.availableCount == 0)
+        model.refresh()
+        for _ in 0..<1_000 {
+            if resetStore.snapshot == nil { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        assert(resetStore.snapshot == nil, "An unchanged overview count of two must invalidate cached zero")
         assert(mutationPaths == ["/api/accounts/test-account/pause", "/api/accounts/test-account/reactivate", "/api/accounts/test-account/reactivate"])
         print("Account action tests passed (mocked HTTP; no live accounts changed)")
     }

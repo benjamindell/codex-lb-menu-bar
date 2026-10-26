@@ -465,6 +465,8 @@ final class StatusViewModel: ObservableObject {
         }
         do {
             try await operationClient.setAccountState(accountID: account.id, action: action)
+            guard client === operationClient else { return }
+            resetStores[account.id]?.invalidateSnapshot()
             // Wait out an older overview read before fetching the confirmed state.
             if let refreshTask { await refreshTask.value }
             guard client === operationClient else { return }
@@ -507,6 +509,19 @@ final class StatusViewModel: ObservableObject {
             let session = try await client.getSession()
             try await recoverAuthenticationIfNeeded(session)
             let value = try await client.fetchOverview()
+            for account in value.accounts {
+                guard let store = resetStores[account.id] else { continue }
+                let previous = overview?.accounts.first { $0.id == account.id }
+                let cachedCount = store.snapshot?.availableCredits().count
+                let countDisagrees = account.availableResetCredits.map { cachedCount != nil && cachedCount != $0 } ?? false
+                if previous?.status != account.status || previous?.availableResetCredits != account.availableResetCredits ||
+                   previous?.resetCreditNearestExpiresAt != account.resetCreditNearestExpiresAt || countDisagrees {
+                    store.invalidateSnapshot()
+                    if resetPopoverAccountID == account.id {
+                        Task { await store.load() }
+                    }
+                }
+            }
             overview = value
             serverVersion = client.serverVersion
             errorMessage = nil

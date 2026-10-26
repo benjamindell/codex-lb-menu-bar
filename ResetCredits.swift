@@ -88,6 +88,7 @@ final class ResetCreditStore: ObservableObject {
     private let defaults: UserDefaults
     private let pendingKey: String
     private let didApply: () -> Void
+    private var loadGeneration = 0
 
     init(accountID: String, server: String, api: ResetCreditAPI,
          defaults: UserDefaults = .standard, didApply: @escaping () -> Void = {}) {
@@ -109,18 +110,29 @@ final class ResetCreditStore: ObservableObject {
         confirmation = nil
     }
 
+    // A quota/status refresh supersedes cached credit details, including reads
+    // started while an account was paused. Never let those restore an old zero.
+    func invalidateSnapshot() {
+        loadGeneration += 1
+        snapshot = nil
+        isLoading = false
+    }
+
     func load() async {
         guard !isLoading, !isApplying else { return }
+        let generation = loadGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
         do {
             let result = try await api.fetchResetCredits(accountID: accountID)
             try Task.checkCancellation()
+            guard generation == loadGeneration else { return }
             snapshot = result
             if pending == nil { errorMessage = nil }
         } catch is CancellationError {
             // Closing the picker cancels reads, never a confirmed redemption.
         } catch {
+            guard generation == loadGeneration else { return }
             errorMessage = error.localizedDescription
         }
     }
